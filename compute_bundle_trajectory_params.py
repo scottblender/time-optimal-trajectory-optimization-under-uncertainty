@@ -45,14 +45,14 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
     S = np.append(s0, lam_sol)
     
     # Define the ODE function for integration (spacecraft dynamics)
-    func = lambda t, x: odefunc(t, x, mu, F, c, m0, g0)
+    func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
 
     # Integrate spacecraft trajectory using Runge-Kutta 45
     Sf = scipy.integrate.solve_ivp(func, [0, tfound], S, method='RK45', rtol=1e-3, atol=1e-6, t_eval=tspan)
     
     # Extract state (position and velocity)
     state = Sf.y[0:7, :]
-    r_tr, v_tr = mee2rv(state[0, :], state[1, :], state[2, :], state[3, :], state[4, :], state[5, :], mu)
+    r_tr, v_tr = mee2rv.mee2rv(state[0, :], state[1, :], state[2, :], state[3, :], state[4, :], state[5, :], mu)
 
     # Set up the initial conditions for the target body (e.g., Earth or another body)
     y0V = np.append(R_V_0, V_V_0)
@@ -61,7 +61,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
 
     # Define the time span for the target body's motion (e.g., 3.5 years)
     tspan_target = [0, 3.5 * 365.25 * 86400]  # 3.5 years in seconds
-    func_target = lambda t, y: twobody(t, y, mu_sun)
+    func_target = lambda t, y: twobody.twobody(t, y, mu_sun)
 
     # Integrate the target body's motion
     yV = scipy.integrate.solve_ivp(func_target, tspan_target, y0V, method='RK45', rtol=1e-3, atol=1e-6)
@@ -96,8 +96,8 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
 
             # Optimize the residuals
             data = (final_lam, max_angle)
-            p_sol2 = scipy.optimize.fsolve(calc_residuals_bundle, delta_values, args=data, xtol=1e-10, maxfev=10000)
-            normfval2 = np.linalg.norm(calc_residuals_bundle(p_sol2, final_lam, max_angle))
+            p_sol2 = scipy.optimize.fsolve(calc_residuals_bundle.calc_residuals_bundle, delta_values, args=data, xtol=1e-10, maxfev=10000)
+            normfval2 = np.linalg.norm(calc_residuals_bundle.calc_residuals_bundle(p_sol2, final_lam, max_angle))
 
         # Apply the perturbations to the lam parameters and initial state
         p_sol2 = np.array(p_sol2)
@@ -113,11 +113,11 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
         y_pert = np.append(new_pos, new_lam)
 
         # Define the ODE function for spacecraft with perturbations
-        func = lambda t, x: odefunc(t, x, mu, F, c, m0, g0)
+        func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
 
         # Run the integration for the perturbed trajectory
         result_container = {}
-        thread = Thread(target=run_solve_ivp, args=(func, [tfound, 0], y_pert, 'RK45', backTspan, 1e-3, 1e-8, result_container))
+        thread = Thread(target=run_solve_ivp.run_solve_ivp, args=(func, [tfound, 0], y_pert, 'RK45', backTspan, 1e-3, 1e-8, result_container))
         start_time = time.time()
         thread.start()
 
@@ -133,7 +133,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
         bundle_Sf = Sf.y
 
         # Convert the state vectors to position and velocity
-        r_bundle, v_bundle = mee2rv(bundle_Sf[0, :], bundle_Sf[1, :], bundle_Sf[2, :], bundle_Sf[3, :], bundle_Sf[4, :], bundle_Sf[5, :], mu)
+        r_bundle, v_bundle = mee2rv.mee2rv(bundle_Sf[0, :], bundle_Sf[1, :], bundle_Sf[2, :], bundle_Sf[3, :], bundle_Sf[4, :], bundle_Sf[5, :], mu)
 
         # Store the results in the bundles
         x_bundle = r_bundle[:, 0]

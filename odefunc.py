@@ -1,4 +1,6 @@
 import numpy as np
+import l1_dot_2B_propul
+import lm_dot_2B_propul
 
 def odefunc(t, x, mu, F, c, m0, g0):
     """
@@ -81,8 +83,8 @@ def odefunc(t, x, mu, F, c, m0, g0):
     mdot = -F_t / (m0 * c)  # rate of change of mass due to thrust
 
     # Step 8: Calculate the Lagrange multiplier rates for the optimization problem
-    lam_dot_2b = l1_dot_2B_propul(F, g, h, k, L, p, F_t, g0, lam_f, lam_g, lam_h, lam_k, lam_L, lam_p, m, m0, mu)
-    lam_m_dot_2b = lm_dot_2B_propul(F, g, h, k, L, p, F_t, g0, lam_f, lam_g, lam_h, lam_k, lam_L, lam_p, m, m0, mu)
+    lam_dot_2b = l1_dot_2B_propul.l1_dot_2B_propul(F, g, h, k, L, p, F_t, g0, lam_f, lam_g, lam_h, lam_k, lam_L, lam_p, m, m0, mu)
+    lam_m_dot_2b = lm_dot_2B_propul.lm_dot_2B_propul(F, g, h, k, L, p, F_t, g0, lam_f, lam_g, lam_h, lam_k, lam_L, lam_p, m, m0, mu)
 
     # Step 9: Concatenate the Lagrange multiplier derivatives into a single vector
     ldot = np.hstack((lam_dot_2b, lam_m_dot_2b))  # concatenate the Lagrange multiplier derivatives

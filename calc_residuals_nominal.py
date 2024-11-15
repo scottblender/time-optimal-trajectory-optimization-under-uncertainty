@@ -1,5 +1,7 @@
 import numpy as np
 import scipy.integrate
+import wrapTo2Pi
+import odefunc
 
 def calc_residuals_nominal(y, s0, s_t, mu, F, c, m0, g0):
     """
@@ -29,11 +31,13 @@ def calc_residuals_nominal(y, s0, s_t, mu, F, c, m0, g0):
     th = y[7]       # Optimization parameter (angle) used for time scaling
 
     # Step 2: Calculate the final time `tf` using the given angle `th` and target time bounds
-    tf = 0.5 * ((tf_g_UB + tf_g_LB) + (tf_g_UB - tf_g_LB) * np.sin(wrapTo2Pi(th)))
+    tf_g_LB = 10000 # lower bound of final time
+    tf_g_UB = 25000 # upper bound of final time
+    tf = 0.5 * ((tf_g_UB + tf_g_LB) + (tf_g_UB - tf_g_LB) * np.sin(wrapTo2Pi.wrapTo2Pi(th)))
     tspan = [0, tf]  # Time span for the integration, from 0 to tf
 
     # Step 3: Define the system of differential equations using the odefunc function
-    func = lambda t, x: odefunc(t, x, mu, F, c, m0, g0)
+    func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
 
     # Step 4: Initialize the state vector by appending the initial state `s0` and Lagrange multipliers `lam_0`
     initial_conditions = np.append(s0, lam_0)
