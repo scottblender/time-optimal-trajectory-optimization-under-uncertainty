@@ -9,7 +9,7 @@ import odefunc
 import calc_residuals_bundle
 import run_solve_ivp
 
-def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU):
+def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, num_bundles):
     """
     This function computes the spacecraft trajectory, bundles the resulting state vectors, and 
     performs the necessary optimization to create perturbed trajectories for Monte Carlo sampling.
@@ -72,7 +72,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
     final_lam = Sf.y[7:14, -1]
 
     # Set up bundles for Monte Carlo sampling of trajectories
-    num_bundles = 500  # Number of perturbed trajectories
+    num_bundles = num_bundles  # Number of perturbed trajectories
     num_steps = 1000  # Number of time steps in each trajectory
     S_bundles = np.zeros((num_steps, 14, num_bundles))  # 3D array to hold all trajectories
     r_bundles = np.zeros((num_steps, 3, num_bundles))  # 3D array for position bundles
