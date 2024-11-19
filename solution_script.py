@@ -6,7 +6,10 @@ from filterpy.kalman import MerweScaledSigmaPoints
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import evaluate_bundle_widths
+import odefunc
+import rv2mee
 
+mu_s = 132712 * 10**6 * 1e9
 # Compute the nominal trajectory parameters
 p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
 
@@ -14,11 +17,12 @@ p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU = compute_nominal_trajecto
 num_bundles = 100
 
 # Compute bundle trajectory parameters
-r_tr, v_tr, S_bundles, r_bundles, v_bundles = compute_bundle_trajectory_params.compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, num_bundles)
+r_tr, v_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles = compute_bundle_trajectory_params.compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, num_bundles)
 
 # Reverse the trajectory to adjust the order of bundles
 r_bundles = r_bundles[::-1, :, :]
 v_bundles = v_bundles[::-1, :, :]
+new_lam_bundles =  new_lam_bundles[::-1,:]
 
 # Get the nominal trajectory for position and velocity
 r_nom = r_tr
@@ -150,3 +154,59 @@ ax.set_zlabel('Z Velocity')
 ax.set_title('Velocity Sigma Points in 3D Space')
 ax.legend()
 plt.show()
+
+
+
+# Assuming the relevant variables (p_sol, tfound, s0, mu, F, c, m0, g0, new_lam_bundles) are already defined
+
+# Number of time steps (modify based on your specific problem)
+num_time_steps = len(time_steps)  # or specify manually
+
+
+# # Loop over each bundle and each time step to solve the IVP
+# for i in range(1):
+#     for j in range(num_time_steps - 1):  # Loop from time_step[j] to time_step[j+1]
+#         tstart = time_steps[j]
+#         tend = time_steps[j + 1]
+
+#         # Get the sigma points for position and velocity at the current time step
+#         sigma_r = sigmas_r[i, :, :, j]
+#         sigma_v = sigmas_v[i, :, :, j]
+
+#         # Create a new plot for this time step
+#         fig = plt.figure(figsize=(12, 12))
+#         ax = fig.add_subplot(111, projection='3d')
+        
+#         # Loop over each sigma point and solve the IVP
+#         for sigma_idx in range(sigma_r.shape[0]):  # 2*nsd + 1 sigma points
+#             # Extract the position and velocity for the current sigma point
+#             r0 = sigma_r[sigma_idx, :]  # Position at t = tstart
+#             v0 = sigma_v[sigma_idx, :]  # Velocity at t = tstart
+
+#             # Convert position and velocity to modified equinoctial elements (mee)
+#             initial_state = rv2mee.rv2mee(np.array([r0]), np.array([v0]), mu_s)
+            
+#             # Append dummy value for further processing (ensure this is intended)
+#             initial_state = np.append(initial_state, np.array([1]), axis=0)  # Add a dummy value for further processing
+            
+#             # Non-dimensionalize the position (if required)
+#             initial_state[0] = np.divide(initial_state[0], DU)  # Non-dimensionalize position
+            
+#             # Extract the lamperture values from new_lam_bundles for the current bundle i
+#             # Make sure new_lam_bundles has the correct shape and indexing
+#             new_lam = new_lam_bundles[:, i]  # 7 elements for lamperture
+
+#             # Combine the initial state (r0, v0) and the new_lam values for integration
+#             S = np.append(initial_state, new_lam)  # Initial state for integration
+            
+#             # Define the ODE function for integration (spacecraft dynamics)
+#             func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
+
+#             # Set up the time span for integration from tstart to tend
+#             tspan = np.linspace(tstart, tend, 5)
+
+#             # Integrate spacecraft trajectory using Runge-Kutta 45
+#             Sf = scipy.integrate.solve_ivp(func, [tstart, tend], S, method='RK45', rtol=1e-3, atol=1e-6, t_eval=tspan)
+#             print(Sf.y)
+    
+

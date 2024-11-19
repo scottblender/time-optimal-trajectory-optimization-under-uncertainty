@@ -33,8 +33,8 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
     - s_bundle: The bundle of state vectors for all perturbed trajectories.
     - r_bundle: The bundle of position vectors for all perturbed trajectories.
     - v_bundle: The bundle of velocity vectors for all perturbed trajectories.
+    - new_lam_bundles: 2D array for storing perturbed `new_lam` values (7, num_bundles).
     """
-
     # Set time span for trajectory integration
     tspan = np.linspace(0, tfound, 1000)
 
@@ -77,6 +77,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
     S_bundles = np.zeros((num_steps, 14, num_bundles))  # 3D array to hold all trajectories
     r_bundles = np.zeros((num_steps, 3, num_bundles))  # 3D array for position bundles
     v_bundles = np.zeros((num_steps, 3, num_bundles))  # 3D array for velocity bundles
+    new_lam_bundles = np.zeros((7, num_bundles))  # 2D array for new_lam bundles (7, num_bundles)
 
     backTspan = np.linspace(tfound, 0, num_steps)  # Time span for backward integration
 
@@ -122,7 +123,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
         thread.start()
 
         # Wait for the thread to finish or timeout after 10 seconds
-        thread.join(timeout=10)
+        thread.join(timeout=30)
         if thread.is_alive():
             print("Timeout exceeded for bundle " + str(index) + ". Redetermining p_sol2.")
             thread.join()  # Clean up the thread
@@ -146,6 +147,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
         bundle_array_size = r_bundle.shape
         r_bundles[0:bundle_array_size[0], 0:bundle_array_size[1], index] += r_bundle
         v_bundles[0:bundle_array_size[0], 0:bundle_array_size[1], index] += v_bundle
+        new_lam_bundles[:, index] += new_lam  # Store new_lam values
 
     # Return the computed trajectory and bundle data
-    return r_tr, v_tr, S_bundles, r_bundles, v_bundles
+    return r_tr, v_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles
