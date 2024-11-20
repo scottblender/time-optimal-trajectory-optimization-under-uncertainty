@@ -81,12 +81,6 @@ def compute_nominal_trajectory_params():
     s_t_t = np.multiply(s_t, eps) + np.multiply(s0[0:6], (1 - eps))
     s_t = s_t_t
 
-    # Initial guesses for the parameters (lam_0 and th)
-    lam_0 = np.multiply(np.random.random(7), -2) + np.random.random(7)  # Random values between -2 and 1
-    th = (-np.pi / 2) + np.multiply(np.random.random(1), np.pi / 2)  # Random angle between -pi/2 and pi/2
-    y = np.append(lam_0, th, axis=0)  # Append to form the initial guess for optimization
-
-    
     # Norm of the residual (used to check convergence)
     normfval = 1
     
