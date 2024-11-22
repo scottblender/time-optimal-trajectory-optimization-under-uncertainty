@@ -68,10 +68,10 @@ lambda_ = alpha**2 * (nsd + kappa) - nsd  # UKF scaling parameter
 weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
 
 # Define the initial covariance matrix for position (identity matrix for position)
-P_r = np.eye(nsd)
+P_r = np.eye(nsd)*0.1
 
 # Define the initial covariance matrix for velocity (identity matrix scaled by 0.1 for velocity)
-P_v = np.eye(nsd) * 0.1  # Covariance matrix for velocity (0.1 km/s)
+P_v = np.eye(nsd) * 0.01  # Covariance matrix for velocity (0.1 km/s)
 
 # Define the time steps for which sigma points will be generated
 time_steps = np.linspace(0, 999, num=3, dtype=int)
