@@ -193,8 +193,9 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
                 if Sf.success:
                     r_new, v_new = mee2rv.mee2rv(Sf.y[0, :], Sf.y[1, :], Sf.y[2, :], Sf.y[3, :], Sf.y[4, :], Sf.y[5, :], mu)
 
-                    # Store the trajectory for the current sigma point
-                    sigma_point_trajectories.append(r_new)
+                    # Store both position and velocity for the current sigma point at each time step
+                    trajectory = np.hstack((r_new, v_new))  # Combine position (r_new) and velocity (v_new)
+                    sigma_point_trajectories.append(trajectory)
 
             except Exception as e:
                 continue  # In case of error, continue with the next sigma point
@@ -208,8 +209,8 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
 # Convert trajectories to a numpy array
 trajectories = np.array(trajectories)
 
-# Ensure that the shape of the trajectories is (4, 2, 13, 1000, 3)
-print("Shape of trajectories:", trajectories.shape)  # Should be (4, 2, 13, 1000, 3)
+# Ensure that the shape of the trajectories is (4, 2, 13, 1000, 6)
+print("Shape of trajectories:", trajectories.shape)  # Should be (4, 2, 13, 1000, 6)
 
 # Ensure that the random indices do not exceed the bounds
 random_indices = random.sample(range(trajectories.shape[0]), 4)
@@ -228,9 +229,13 @@ for idx in random_indices:
     # Loop through all sigma point trajectories for the selected original trajectory
     for sigma_idx in range(trajectories.shape[2]):  # Loop through the 13 sigma points
         # Extract the sub-trajectory for the current sigma point from time step t_k to t_{k+1}
-        r_new = trajectories[idx, 0, sigma_idx, :, :]  # (1000, 3) for the 1st time interval
+        r_new_and_v_new = trajectories[idx, 0, sigma_idx, :, :]  # (1000, 6) for the 1st time interval
 
-        # Plot the sigma point trajectory in the current subplot (3D space)
+        # Extract position and velocity separately
+        r_new = r_new_and_v_new[:, :3]  # Position (X, Y, Z)
+        v_new = r_new_and_v_new[:, 3:]  # Velocity (Vx, Vy, Vz)
+
+        # Plot the position trajectory in the current subplot (3D space)
         if sigma_idx == 0:
             # Thicker line and label for sigma point 0 (Initial State)
             ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], label="Initial State", color='b', linewidth=2)
@@ -255,12 +260,39 @@ plt.show()
 # Choose a random bundle (trajectory set) from the available ones (assuming 4 bundles here)
 random_bundle_idx = random.randint(0, 3)  # Choose a random index between 0 and 3
 
+# Choose a random bundle (trajectory set) from the available ones (assuming 4 bundles here)
+random_bundle_idx = random.randint(0, 3)  # Choose a random index between 0 and 3
+
 # Extract the selected random trajectory for the chosen bundle
 # Assume that for each bundle, there are multiple time steps and sigma points
-random_trajectory = trajectories[random_bundle_idx]  # Shape: (time_steps, sigma_points, trajectory_length, 3)
+random_trajectory = trajectories[random_bundle_idx]  # Shape: (time_steps, sigma_points, trajectory_length, 6)
+
+# Loop through each time step and sigma point to print the start and end positions and velocities
+num_time_steps = random_trajectory.shape[0]
+num_sigma_points = random_trajectory.shape[1]
+
+# Loop through each time step and sigma point to print the start and end positions and velocities
+for t_idx in range(num_time_steps):
+    print(f"Time Step {t_idx}:")
+    for sigma_idx in range(num_sigma_points):
+        # Extract position and velocity for the current sigma point
+        r_new = random_trajectory[t_idx, sigma_idx, :, :3]  # Position (X, Y, Z)
+        v_new = random_trajectory[t_idx, sigma_idx, :, 3:]  # Velocity (Vx, Vy, Vz)
+        
+        # Start and end positions and velocities
+        start_pos = r_new[0, :]  # Start position
+        end_pos = r_new[-1, :]   # End position
+        start_vel = v_new[0, :]  # Start velocity
+        end_vel = v_new[-1, :]   # End velocity
+
+        # Print the info for the current sigma point at the current time step
+        print(f"  Sigma Point {sigma_idx}:")
+        print(f"    Start Position: {start_pos}")
+        print(f"    End Position: {end_pos}")
+        print(f"    Start Velocity: {start_vel}")
+        print(f"    End Velocity: {end_vel}")
 
 # Create a subplot for each time step (3D subplots for each time step)
-num_time_steps = random_trajectory.shape[0]
 fig, axes = plt.subplots(1, num_time_steps, figsize=(15, 5), subplot_kw={'projection': '3d'})
 
 # If there's only one time step, axes will not be a list, so we make it iterable
@@ -276,25 +308,27 @@ for t_idx, ax in enumerate(axes):
 
     # Plot the original trajectory (sigma point 0 for that time step)
     original_trajectory = random_trajectory[t_idx, 0, :, :]  # First sigma point is the original trajectory
-    ax.plot(original_trajectory[:, 0], original_trajectory[:, 1], original_trajectory[:, 2], 
+    r_new = original_trajectory[:, :3]  # Position (X, Y, Z)
+    v_new = original_trajectory[:, 3:]  # Velocity (Vx, Vy, Vz)
+    ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], 
             label="Original Trajectory", color='b', linewidth=2)
 
     # Add markers for the start and end points of the original trajectory (using X markers)
-    start_pos = original_trajectory[0, :]  # Start position
-    end_pos = original_trajectory[-1, :]   # End position
+    start_pos = r_new[0, :]  # Start position
+    end_pos = r_new[-1, :]   # End position
     ax.scatter(start_pos[0], start_pos[1], start_pos[2], color='g', marker='x', s=100, label='Start Point')
     ax.scatter(end_pos[0], end_pos[1], end_pos[2], color='r', marker='x', s=100, label='End Point')
 
     # Loop through each sigma point (perturbed trajectories) and plot
-    num_sigma_points = random_trajectory.shape[1]  # Get the number of sigma points (13)
     for sigma_idx in range(1, num_sigma_points):  # Start from 1 to skip the original
         perturbed_trajectory = random_trajectory[t_idx, sigma_idx, :, :]
-        ax.plot(perturbed_trajectory[:, 0], perturbed_trajectory[:, 1], perturbed_trajectory[:, 2], 
+        r_perturbed = perturbed_trajectory[:, :3]  # Position (X, Y, Z)
+        ax.plot(r_perturbed[:, 0], r_perturbed[:, 1], r_perturbed[:, 2], 
                 label=f"Sigma Point {sigma_idx}", color='r', alpha=0.4)
 
         # Add markers for the start and end points of the perturbed trajectory (using X markers)
-        start_pos_perturbed = perturbed_trajectory[0, :]  # Start position for perturbed trajectory
-        end_pos_perturbed = perturbed_trajectory[-1, :]   # End position for perturbed trajectory
+        start_pos_perturbed = r_perturbed[0, :]  # Start position for perturbed trajectory
+        end_pos_perturbed = r_perturbed[-1, :]   # End position for perturbed trajectory
         ax.scatter(start_pos_perturbed[0], start_pos_perturbed[1], start_pos_perturbed[2], 
                    color='g', marker='x', s=100, alpha=0.5)
         ax.scatter(end_pos_perturbed[0], end_pos_perturbed[1], end_pos_perturbed[2], 
@@ -307,3 +341,4 @@ for t_idx, ax in enumerate(axes):
 plt.tight_layout()
 plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
 plt.show()
+
