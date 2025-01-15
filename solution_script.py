@@ -307,16 +307,3 @@ for t_idx, ax in enumerate(axes):
 plt.tight_layout()
 plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
 plt.show()
-
-# Loop through each time step and sigma point and output start and end positions/velocities
-for t_idx in range(num_time_steps):
-    for sigma_idx in range(random_trajectory.shape[1]):  # Loop through sigma points (13)
-        start_pos = random_trajectory[t_idx, sigma_idx, 0, :]  # Position at start
-        end_pos = random_trajectory[t_idx, sigma_idx, -1, :]  # Position at end
-        start_vel = random_trajectory[t_idx, sigma_idx, 0, :]  # Velocity at start (for now, same as position)
-        end_vel = random_trajectory[t_idx, sigma_idx, -1, :]  # Velocity at end (for now, same as position)
-
-        # Print start and end positions along with velocities for each time step and sigma point
-        print(f"Time Step {t_idx}, Sigma Point {sigma_idx}:")
-        print(f"  Start Position: {start_pos}, Start Velocity: {start_vel}")
-        print(f"  End Position: {end_pos}, End Velocity: {end_vel}")
