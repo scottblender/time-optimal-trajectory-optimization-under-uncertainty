@@ -71,12 +71,13 @@ weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
 
 # Define the initial covariance matrix for position and velocity (combined state)
 P_combined = np.block([
-    [np.eye(nsd//2) * 0.1, np.zeros((nsd//2, nsd//2))],  # Position covariance with zero velocity covariance
-    [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.001]  # Velocity covariance
+    [np.eye(nsd//2) * 0.001, np.zeros((nsd//2, nsd//2))],  # Position covariance with zero velocity covariance
+    [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]  # Velocity covariance
 ])
 
 # Define the time steps for which sigma points will be generated
-time_steps = np.linspace(0, 999, num=3, dtype=int)
+num_time_steps = 5
+time_steps = np.linspace(0, len(backTspan) - 1, num_time_steps, dtype=int)
 num_points = time_steps.shape[0]
 
 # Create placeholders for storing the sigma points (7 for each bundle)
@@ -137,9 +138,9 @@ ax2.legend()
 plt.tight_layout()
 plt.show()
 
-# Assuming the relevant variables (p_sol, tfound, s0, mu, F, c, m0, g0, new_lam_bundles) are already defined
-num_time_steps = len(time_steps)  # or specify manually
-time = [backTspan[time_steps[2]], backTspan[time_steps[1]], backTspan[time_steps[0]]]
+# Now select times based on time_steps
+time = [backTspan[time_steps[i]] for i in range(num_time_steps)]
+time = time[::-1]
 
 # Initialize an empty list to store trajectories for all bundles
 trajectories = []
@@ -216,7 +217,7 @@ fig = plt.figure(figsize=(12, 12))
 # Loop through the randomly selected indices
 for idx in random_indices:
     ax = fig.add_subplot(2, 2, random_indices.index(idx) + 1, projection='3d')
-    ax.set_title(f"Original Trajectory {idx} - All Sigma Points")
+    ax.set_title(f"Original Trajectory {idx} - Uncertainty Propagation")
     ax.set_xlabel("X Position")
     ax.set_ylabel("Y Position")
     ax.set_zlabel("Z Position")
@@ -235,10 +236,52 @@ for idx in random_indices:
             # Thinner line and lower transparency for all other sigma points
             ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], color='b', alpha=0.3, linewidth=1, label=f"Sigma Point {sigma_idx}")
 
-    # Automatically place the legend in the best spot
-    ax.legend(loc='best')
+    # Legend
+    ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid()
 
 # Adjust layout for better spacing between subplots
 plt.tight_layout()
+plt.show()
+
+# Choose a random bundle (trajectory set) from the available ones (assuming 4 bundles here)
+random_bundle_idx = random.randint(0, 3)  # Choose a random index between 0 and 3
+
+# Extract the selected random trajectory for the chosen bundle
+# Assume that for each bundle, there are multiple time steps and sigma points
+random_trajectory = trajectories[random_bundle_idx]  # Shape: (time_steps, sigma_points, trajectory_length, 3)
+
+# Create a subplot for each time step (3D subplots for each time step)
+num_time_steps = random_trajectory.shape[0]
+fig, axes = plt.subplots(1, num_time_steps, figsize=(15, 5), subplot_kw={'projection': '3d'})
+
+# If there's only one time step, axes will not be a list, so we make it iterable
+if num_time_steps == 1:
+    axes = [axes]
+
+# Loop through each time step and plot
+for t_idx, ax in enumerate(axes):
+    ax.set_title(f"Time Step {t_idx}")
+    ax.set_xlabel('X Position')
+    ax.set_ylabel('Y Position')
+    ax.set_zlabel('Z Position')
+    
+    # Plot the original trajectory (sigma point 0 for that time step)
+    original_trajectory = random_trajectory[t_idx, 0, :, :]  # First sigma point is the original trajectory
+    ax.plot(original_trajectory[:, 0], original_trajectory[:, 1], original_trajectory[:, 2], 
+            label="Original Trajectory", color='b', linewidth=2)
+    
+    # Loop through each sigma point (perturbed trajectories) and plot
+    num_sigma_points = random_trajectory.shape[1]  # Get the number of sigma points (13)
+    for sigma_idx in range(1, num_sigma_points):  # Start from 1 to skip the original
+        perturbed_trajectory = random_trajectory[t_idx, sigma_idx, :, :]
+        ax.plot(perturbed_trajectory[:, 0], perturbed_trajectory[:, 1], perturbed_trajectory[:, 2], 
+                label=f"Sigma Point {sigma_idx}", color='r', alpha=0.4)
+    
+    # Add grid and legend
+    ax.grid(True)
+
+# Adjust layout and add legend outside the plot for clarity
+plt.tight_layout()
+plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
 plt.show()
