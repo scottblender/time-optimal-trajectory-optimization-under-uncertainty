@@ -47,15 +47,25 @@ x_r_bundle = r_bundles[:,0, 1]
 y_r_bundle = r_bundles[:,1, 1]
 z_r_bundle = r_bundles[:, 2,1]
 
-# Create a 3D plot to visualize both the nominal and perturbed position trajectories
+# Create a 3D plot to visualize the nominal and perturbed position trajectories for all bundles
 fig = plt.figure(figsize=(12, 12))
 ax = fig.add_axes([0, 0, 1, 1], projection='3d')
-ax.plot(x_r, y_r, z_r, label='Nominal Position Trajectory', color='r')
-ax.plot(x_r_bundle, y_r_bundle, z_r_bundle, label='Perturbed Position Trajectory', color='b')
+
+# Plot the nominal trajectory with a larger line width
+ax.plot(x_r, y_r, z_r, label='Nominal Position Trajectory', color='r', linewidth=3)
+
+# Loop through all bundles and plot their respective trajectories with more transparency
+for i in range(num_bundles):
+    x_r_bundle = r_bundles[:, 0, i]
+    y_r_bundle = r_bundles[:, 1, i]
+    z_r_bundle = r_bundles[:, 2, i]
+    ax.plot(x_r_bundle, y_r_bundle, z_r_bundle, color='b', alpha=0.2)  # Change alpha for more transparency
+
 ax.set_xlabel('X Position')
 ax.set_ylabel('Y Position')
 ax.set_zlabel('Z Position')
-ax.set_title('3D Position Trajectory Plot')
+ax.set_title(f'3D Position Trajectory Plot for {num_bundles} Bundles')
+plt.axis('equal')
 ax.legend()
 plt.show()
 
@@ -71,8 +81,8 @@ weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
 
 # Define the initial covariance matrix for position and velocity (combined state)
 P_combined = np.block([
-    [np.eye(nsd//2) * 0.001, np.zeros((nsd//2, nsd//2))],  # Position covariance with zero velocity covariance
-    [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]  # Velocity covariance
+    [np.eye(nsd//2) * 0.01, np.zeros((nsd//2, nsd//2))],  # Position covariance with zero velocity covariance
+    [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.001]  # Velocity covariance
 ])
 
 # Print the matrix

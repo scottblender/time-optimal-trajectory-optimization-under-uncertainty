@@ -86,7 +86,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
 
     # Perturbation parameters for Monte Carlo sampling
     alpha = 1  # Magnitude of perturbation scaling
-    max_angle = 1e-3  # Maximum angle for perturbations
+    max_angle = 1e-5  # Maximum angle for perturbations
 
     # Generate perturbed trajectories via Monte Carlo sampling
     for index in range(S_bundles.shape[2]):
