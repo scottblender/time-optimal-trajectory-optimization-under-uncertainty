@@ -82,7 +82,7 @@ weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
 # Define the initial covariance matrix for position and velocity (combined state)
 P_combined = np.block([
     [np.eye(nsd//2) * 0.01, np.zeros((nsd//2, nsd//2))],  # Position covariance with zero velocity covariance
-    [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.001]  # Velocity covariance
+    [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]  # Velocity covariance
 ])
 
 # Print the matrix
@@ -111,8 +111,8 @@ for i in range(num_bundles):
         
         # Generate sigma points in the positive and negative directions for each dimension (x, y, z, vx, vy, vz)
         for k in range(nsd):
-            sigmas_combined[i, 2*k+1, :, j] = nominal_combined + U_combined[k, :]  # Perturb positive
-            sigmas_combined[i, 2*k+2, :, j] = nominal_combined - U_combined[k, :]  # Perturb negative
+            sigmas_combined[i, k+1, :, j] = nominal_combined + U_combined[k]  # Perturb positive
+            sigmas_combined[i, nsd+k+1, :, j] = nominal_combined - U_combined[k]  # Perturb negative
 
 # Output the shape of the generated sigma points for the combined state
 print("Sigma Points for Combined State (Position + Velocity):", sigmas_combined.shape)
