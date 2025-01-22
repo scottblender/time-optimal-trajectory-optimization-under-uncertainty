@@ -33,7 +33,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
     - S_bundles: The bundle of state vectors for all perturbed trajectories, numpy array of shape (num_steps, 14, num_bundles)
     - r_bundles: The bundle of position vectors for all perturbed trajectories, numpy array of shape (num_steps, 3, num_bundles)
     - v_bundles: The bundle of velocity vectors for all perturbed trajectories, numpy array of shape (num_steps, 3, num_bundles)
-    - new_lam_bundles: 2D array for storing perturbed `new_lam` values, numpy array of shape (7, num_bundles)
+    - new_lam_bundles: 3D array for storing perturbed `new_lam` values, numpy array of shape (num_steps, 7, num_bundles)
     - backTspan: Time span for backward integration, numpy array of shape (num_steps,)
     """
 
@@ -79,7 +79,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
     S_bundles = np.zeros((num_steps, 14, num_bundles))  # 3D array for state vectors of perturbed trajectories
     r_bundles = np.zeros((num_steps, 3, num_bundles))  # 3D array for position bundles
     v_bundles = np.zeros((num_steps, 3, num_bundles))  # 3D array for velocity bundles
-    new_lam_bundles = np.zeros((7, num_bundles))  # 2D array for new lam bundles (7, num_bundles)
+    new_lam_bundles = np.zeros((num_steps, 7, num_bundles))  # 3D array for new lam bundles (num_steps, 7, num_bundles)
 
     # Time span for backward integration
     backTspan = np.linspace(tfound, 0, num_steps)
@@ -149,8 +149,8 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
         r_bundles[0:bundle_array_size[0], 0:bundle_array_size[1], index] += r_bundle
         v_bundles[0:bundle_array_size[0], 0:bundle_array_size[1], index] += v_bundle
 
-        # Store the new lambda parameters for the perturbed trajectory
-        new_lam_bundles[:, index] += new_lam
+        # Store the lambda parameters (7 elements) at each time step
+        new_lam_bundles[:, :, index] = bundle_Sf[7:, :].T  # Storing the 7 lambda parameters for each time step
 
     # Return the trajectory results and bundles for analysis
     return r_tr, v_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, backTspan

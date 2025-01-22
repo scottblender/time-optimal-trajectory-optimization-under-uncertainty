@@ -27,7 +27,16 @@ r_tr, v_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, backTspan = comput
 # Reverse the trajectory to adjust the order of bundles
 r_bundles = r_bundles[::-1, :, :]
 v_bundles = v_bundles[::-1, :, :]
-new_lam_bundles = new_lam_bundles[::-1,:]
+#new_lam_bundles = new_lam_bundles[::-1,:, :]
+# Print out new_lam_bundles nicely
+num_steps, lam_size, num_bundles = new_lam_bundles.shape
+
+# Loop over the bundles and time steps to print out new_lam_bundles
+#for t in range(num_steps):
+#    print(f"\nTime Step {t+1} (backTspan time {backTspan[t]}):")
+#    
+#    for b in range(num_bundles):
+#        print(f"  Bundle {b+1}: {new_lam_bundles[t, :, b]}")
 
 # Get the nominal trajectory for position and velocity
 r_nom = r_tr
@@ -82,12 +91,13 @@ weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
 # Define the initial covariance matrix for position and velocity (combined state)
 P_combined = np.block([
     [np.eye(nsd//2) * 0.01, np.zeros((nsd//2, nsd//2))],  # Position covariance with zero velocity covariance
-    [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.001]  # Velocity covariance
+    [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]  # Velocity covariance
 ])
 
 # Print the matrix
 print("Covariance Matrix (P_combined):")
-print(P_combined)
+for row in P_combined:
+    print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places for more precisi
 
 # Define the time steps for which sigma points will be generated
 num_time_steps = 5
@@ -99,6 +109,9 @@ sigmas_combined = np.zeros((num_bundles, 2 * nsd + 1, nsd, num_points))  # For p
 
 # Compute the Cholesky decomposition of the scaled covariance matrix for the combined state
 U_combined = scipy.linalg.cholesky((nsd + lambda_) * P_combined)  # For combined state
+print("Cholesky Decomposition Matrix (U_combined):")
+for row in U_combined:
+    print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places for more precisi
 
 # Loop over each bundle to generate sigma points for the combined state and time step
 for i in range(num_bundles):
@@ -119,14 +132,14 @@ bundle_idx = 0
 time_step_idx = 0
 
 print(f"Sigma points for Bundle {bundle_idx+1}, Time Step {time_step_idx+1}:")
-print(sigmas_combined[bundle_idx, :, :, time_step_idx])
+# Format the sigma points output nicely
+for row in sigmas_combined[bundle_idx, :, :, time_step_idx].reshape((2 * nsd + 1, -1)):
+    print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places
 # Output the shape of the generated sigma points for the combined state
 print("Sigma Points for Combined State (Position + Velocity):", sigmas_combined.shape)
 
 # Convert the sigma points for the first bundle and first time step into a pandas DataFrame for position and velocity
 df_combined = pd.DataFrame(sigmas_combined[0, :, :, 0].reshape(13, 6))  # 13 sigma points, 6 dimensions (3 position + 3 velocity)
-print("Combined Sigma Points (first bundle, first time step):")
-print(df_combined.head(7))
 
 # Plotting sigma points for the combined state (position + velocity)
 fig = plt.figure(figsize=(12, 8))
@@ -167,9 +180,6 @@ trajectories = []
 
 # Loop over each bundle and each time step to solve the IVP
 for i in range(num_bundles):  # Loop over each bundle (adjust based on your needs)
-    # Extract the lamperture values from new_lam_bundles for the current bundle i
-    new_lam = new_lam_bundles[:, i]  # 7 elements for lamperture
-
     # List to store the sigma points trajectories for the current bundle
     bundle_trajectories = []
 
@@ -183,6 +193,13 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
 
         # List to store the trajectories for all sigma points at the current time step
         sigma_point_trajectories = []
+        
+        # Find the closest index in backTspan for the current time step
+        time_index = np.argmin(np.abs(backTspan - time[j]))
+        #print(f"Time Index: {time_index}")
+
+        # Extract the lamperture values (new_lam) at the current time step for the current bundle
+        new_lam = new_lam_bundles[time_index, :, i]  # Extract 7 elements for lamperture at time step j for bundle i
 
         # Loop over the sigma points
         for sigma_idx in range(sigma_combined.shape[0]):  # Loop through the 13 sigma points
@@ -193,7 +210,14 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
             # Convert the position and velocity to modified equinoctial elements
             initial_state = rv2mee.rv2mee(np.array([r0]), np.array([v0]), mu)
             initial_state = np.append(initial_state, np.array([1]), axis=0)  # Append the 1 element for perturbation
-            S = np.append(initial_state, new_lam)  # Append the lamperture values
+            S = np.append(initial_state, new_lam)  # Append the lamperture values (new_lam)
+
+            # Print the initial conditions for this sigma point (before integration)
+            #print(f"Initial conditions for sigma point {sigma_idx+1} (Bundle {i+1}, Time Step {j+1}):")
+            #print(f"  Position (r0): {r0}")
+            #print(f"  Velocity (v0): {v0}")
+            #print(f"  Lamperture values: {new_lam}")
+            #print(f"  Combined state (S): {S}")
 
             # Define the ODE function for integration
             func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
@@ -203,16 +227,24 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
 
             try:
                 # Solve the ODE using RK45 method
-                Sf = scipy.integrate.solve_ivp(func, [tstart, tend], S, method='RK45', rtol=1e-3, atol=1e-6, t_eval=tspan)
+                Sf = scipy.integrate.solve_ivp(func, [tstart, tend], S, method='RK45', rtol=1e-6, atol=1e-8, t_eval=tspan)
 
                 # If the solution is successful, convert the MEE back to RV
                 if Sf.success:
                     r_new, v_new = mee2rv.mee2rv(Sf.y[0, :], Sf.y[1, :], Sf.y[2, :], Sf.y[3, :], Sf.y[4, :], Sf.y[5, :], mu)
+                    
+                    # Print the shape of the solution Sf
+                    #print(f"Shape of Sf (solution for sigma point {sigma_idx+1}, Bundle {i+1}, Time Step {j+1}):")
+                    #print(Sf.y.shape)
+
+                    # Print the solution for this sigma point
+                    #print(f"Solution for sigma point {sigma_idx+1} (Bundle {i+1}, Time Step {j+1}):")
+                    #print(f"  Final position (r_new): {r_new}")
+                    #print(f"  Final velocity (v_new): {v_new}")
 
                     # Store both position and velocity for the current sigma point at each time step
                     trajectory = np.hstack((r_new, v_new))  # Combine position (r_new) and velocity (v_new)
                     sigma_point_trajectories.append(trajectory)
-
             except Exception as e:
                 continue  # In case of error, continue with the next sigma point
 
@@ -250,6 +282,17 @@ for idx in random_indices:
         # Extract position and velocity separately
         r_new = r_new_and_v_new[:, :3]  # Position (X, Y, Z)
         v_new = r_new_and_v_new[:, 3:]  # Velocity (Vx, Vy, Vz)
+
+        # Compare the current trajectory with all previous trajectories for this index
+        for prev_sigma_idx in range(sigma_idx):
+            prev_r_new_and_v_new = trajectories[idx, 0, prev_sigma_idx, :, :]
+            prev_r_new = prev_r_new_and_v_new[:, :3]
+            prev_v_new = prev_r_new_and_v_new[:, 3:]
+
+            # Compare the current position and velocity matrices with the previous ones
+            if np.allclose(r_new, prev_r_new, atol=1e-2) and np.allclose(v_new, prev_v_new, atol=1e-2):
+                print(f"Trajectory {idx}, Sigma Point {sigma_idx} is the same as Sigma Point {prev_sigma_idx}")
+                break
 
         # Plot the position trajectory in the current subplot (3D space)
         if sigma_idx == 0:
