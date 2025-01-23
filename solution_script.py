@@ -213,11 +213,11 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
             S = np.append(initial_state, new_lam)  # Append the lamperture values (new_lam)
 
             # Print the initial conditions for this sigma point (before integration)
-            #print(f"Initial conditions for sigma point {sigma_idx+1} (Bundle {i+1}, Time Step {j+1}):")
-            #print(f"  Position (r0): {r0}")
-            #print(f"  Velocity (v0): {v0}")
-            #print(f"  Lamperture values: {new_lam}")
-            #print(f"  Combined state (S): {S}")
+            # print(f"Initial conditions for sigma point {sigma_idx+1} (Bundle {i+1}, Time Step {j+1}):")
+            # print(f"  Position (r0): {r0}")
+            # print(f"  Velocity (v0): {v0}")
+            # print(f"  Lamperture values: {new_lam}")
+            # print(f"  Combined state (S): {S}")
 
             # Define the ODE function for integration
             func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
@@ -233,14 +233,30 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
                 if Sf.success:
                     r_new, v_new = mee2rv.mee2rv(Sf.y[0, :], Sf.y[1, :], Sf.y[2, :], Sf.y[3, :], Sf.y[4, :], Sf.y[5, :], mu)
                     
+                    # Print the initial state S before passing to solve_ivp
+                    # print(f"Initial state (S) for sigma point {sigma_idx+1}: {S}")
+
+                    # Print the solution at the first time step (tstart)
+                    # print(f"Solution at tstart ({tstart}): {Sf.y[:, 0]}")
+                    
+                    # Print the solution for this sigma point
+                    # print(f"Solution for sigma point {sigma_idx+1} (Bundle {i+1}, Time Step {j+1}):")
+                    # print(f"  Final position (r_new): {r_new}")
+                    # print(f"  Final velocity (v_new): {v_new}")
+                    
+                    # Compute the position error (Euclidean norm of the difference between initial and final position)
+                    position_error = np.linalg.norm(r0 - r_new,axis=1)
+
+                    # Compute the velocity error (Euclidean norm of the difference between initial and final velocity)
+                    velocity_error = np.linalg.norm(v0 - v_new,axis=1)
+                    
+                    # Check if the initial and final positions/velocities are close
+                    print(f"Position error: {position_error[0]}")
+                    print(f"Velocity error: {velocity_error[0]}")
+
                     # Print the shape of the solution Sf
                     #print(f"Shape of Sf (solution for sigma point {sigma_idx+1}, Bundle {i+1}, Time Step {j+1}):")
                     #print(Sf.y.shape)
-
-                    # Print the solution for this sigma point
-                    #print(f"Solution for sigma point {sigma_idx+1} (Bundle {i+1}, Time Step {j+1}):")
-                    #print(f"  Final position (r_new): {r_new}")
-                    #print(f"  Final velocity (v_new): {v_new}")
 
                     # Store both position and velocity for the current sigma point at each time step
                     trajectory = np.hstack((r_new, v_new))  # Combine position (r_new) and velocity (v_new)

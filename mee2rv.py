@@ -43,8 +43,8 @@ def mee2rv(p, f, g, h, k, L, mu):
     # Each component of v_eci is calculated based on the semi-latus rectum (p), gravitational parameter (mu),
     # and the equinoctial elements (f, g, h, k)
     v_eci[:, 0] = -np.sqrt(mu / p) * np.divide((np.sin(L) + alpha2 * np.sin(L) - 2 * h * k * np.cos(L) + g - 2 * f * h * k + alpha2 * g), s2)
-    v_eci[:, 1] = -np.sqrt(mu / p) * np.divide((-np.cos(L) + alpha2 * np.cos(L) + 2 * h * k * np.cos(L) - f + 2 * g * h * k + alpha2 * f), s2)
-    v_eci[:, 2] = 2 * np.sqrt(mu / p) * np.divide((h * np.cos(L) + k * np.sin(L) + f * h * g * k), s2)
+    v_eci[:, 1] = -np.sqrt(mu / p) * np.divide((-np.cos(L) + alpha2 * np.cos(L) + 2 * h * k * np.sin(L) - f + 2 * g * h * k + alpha2 * f), s2)
+    v_eci[:, 2] = 2 * np.sqrt(mu / p) * np.divide((h * np.cos(L) + k * np.sin(L) + f * h + g * k), s2)
 
     # Step 6: Return the computed position (r_eci) and velocity (v_eci) vectors in the ECI frame
     return r_eci, v_eci
