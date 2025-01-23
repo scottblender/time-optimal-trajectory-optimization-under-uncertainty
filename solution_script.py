@@ -251,8 +251,8 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
                     velocity_error = np.linalg.norm(v0 - v_new,axis=1)
                     
                     # Check if the initial and final positions/velocities are close
-                    print(f"Position error: {position_error[0]}")
-                    print(f"Velocity error: {velocity_error[0]}")
+                    #print(f"Position error: {position_error[0]}")
+                    #rint(f"Velocity error: {velocity_error[0]}")
 
                     # Print the shape of the solution Sf
                     #print(f"Shape of Sf (solution for sigma point {sigma_idx+1}, Bundle {i+1}, Time Step {j+1}):")
