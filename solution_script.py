@@ -94,6 +94,8 @@ P_combined = np.block([
     [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]  # Velocity covariance
 ])
 
+print(weights.sigma_points(np.hstack([r_nom[0,:],v_nom[0,:]]),P_combined))
+
 # Print the matrix
 print("Covariance Matrix (P_combined):")
 for row in P_combined:
@@ -124,9 +126,9 @@ for i in range(num_bundles):
         
         # Generate sigma points in the positive and negative directions for each dimension (x, y, z, vx, vy, vz)
         for k in range(nsd):
-            sigmas_combined[i, k+1, :, j] = nominal_combined + U_combined[k]  # Perturb positive
-            sigmas_combined[i, nsd+k+1, :, j] = nominal_combined - U_combined[k]  # Perturb negative
-
+            #sigmas_combined[i, k+1, :, j] = nominal_combined + U_combined[k]  # Perturb positive
+            #sigmas_combined[i, nsd+k+1, :, j] = nominal_combined - U_combined[k]  # Perturb negative
+            sigmas_combined[i,:,:,j] = weights.sigma_points(nominal_combined,P_combined)
 # Example: Print the sigma points for the first bundle (i = 0) at the first time step (j = 0)
 bundle_idx = 0
 time_step_idx = 0
