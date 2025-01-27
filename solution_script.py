@@ -82,8 +82,9 @@ plt.show()
 nsd = 6  # Dimensionality of the state (3D position and 3D velocity combined)
 beta = 2.  # UKF parameter
 kappa = float(3 - nsd)  # UKF parameter
-alpha = 0.5  # UKF parameter
+alpha = 1.  # UKF parameter
 lambda_ = alpha**2 * (nsd + kappa) - nsd  # UKF scaling parameter
+print(lambda_)
 
 # Create weights for the sigma points using the MerweScaledSigmaPoints class
 weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
@@ -94,7 +95,7 @@ P_combined = np.block([
     [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]  # Velocity covariance
 ])
 
-print(weights.sigma_points(np.hstack([r_nom[0,:],v_nom[0,:]]),P_combined))
+#print(weights.sigma_points(np.hstack([r_nom[0,:],v_nom[0,:]]),P_combined))
 
 # Print the matrix
 print("Covariance Matrix (P_combined):")
@@ -152,10 +153,31 @@ sigma_points_position = df_combined.iloc[:, :3].values
 nominal_position = sigma_points_position[0]
 ax1.scatter(sigma_points_position[:, 0], sigma_points_position[:, 1], sigma_points_position[:, 2], color='b', label='Position Sigma Points')
 ax1.scatter(nominal_position[0], nominal_position[1], nominal_position[2], color='r', label='Nominal Position', s=100)
+
+# Plot 3-sigma ellipsoid around the nominal position
+covariance_position = P_combined[:3, :3]  # Extract the position part of the covariance matrix
+eigenvalues_position, eigenvectors_position = np.linalg.eigh(covariance_position)  # Eigen decomposition
+radii_position = 3 * np.sqrt(eigenvalues_position)  # 3-sigma scaling
+
+# Create a grid of points in 3D spherical coordinates
+phi, theta = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
+x = radii_position[0] * np.sin(theta) * np.cos(phi)
+y = radii_position[1] * np.sin(theta) * np.sin(phi)
+z = radii_position[2] * np.cos(theta)
+
+# Reshape and transform into 3D space
+points_position = np.vstack([x.ravel(), y.ravel(), z.ravel()])
+ellipsoid_position = eigenvectors_position @ points_position + nominal_position[:, np.newaxis]
+
+# Plot the ellipsoid
+ax1.plot_wireframe(ellipsoid_position[0, :].reshape(x.shape), 
+                   ellipsoid_position[1, :].reshape(y.shape),
+                   ellipsoid_position[2, :].reshape(z.shape), color='g', alpha=0.3)
+
 ax1.set_xlabel('X Position')
 ax1.set_ylabel('Y Position')
 ax1.set_zlabel('Z Position')
-ax1.set_title('Position Sigma Points in 3D Space')
+ax1.set_title('Position Sigma Points in 3D Space with 3-Sigma Ellipsoid')
 ax1.legend()
 
 # Plot velocity part
@@ -164,14 +186,35 @@ sigma_points_velocity = df_combined.iloc[:, 3:].values
 nominal_velocity = sigma_points_velocity[0]
 ax2.scatter(sigma_points_velocity[:, 0], sigma_points_velocity[:, 1], sigma_points_velocity[:, 2], color='b', label='Velocity Sigma Points')
 ax2.scatter(nominal_velocity[0], nominal_velocity[1], nominal_velocity[2], color='r', label='Nominal Velocity', s=100)
+
+# Plot 3-sigma ellipsoid around the nominal velocity
+covariance_velocity = P_combined[3:, 3:]  # Extract the velocity part of the covariance matrix
+eigenvalues_velocity, eigenvectors_velocity = np.linalg.eigh(covariance_velocity)  # Eigen decomposition
+radii_velocity = 3 * np.sqrt(eigenvalues_velocity)  # 3-sigma scaling
+
+# Create a grid of points in 3D spherical coordinates
+x_vel = radii_velocity[0] * np.sin(theta) * np.cos(phi)
+y_vel = radii_velocity[1] * np.sin(theta) * np.sin(phi)
+z_vel = radii_velocity[2] * np.cos(theta)
+
+# Reshape and transform into 3D space
+points_velocity = np.vstack([x_vel.ravel(), y_vel.ravel(), z_vel.ravel()])
+ellipsoid_velocity = eigenvectors_velocity @ points_velocity + nominal_velocity[:, np.newaxis]
+
+# Plot the ellipsoid
+ax2.plot_wireframe(ellipsoid_velocity[0, :].reshape(x_vel.shape), 
+                   ellipsoid_velocity[1, :].reshape(y_vel.shape),
+                   ellipsoid_velocity[2, :].reshape(z_vel.shape), color='g', alpha=0.3)
+
 ax2.set_xlabel('X Velocity')
 ax2.set_ylabel('Y Velocity')
 ax2.set_zlabel('Z Velocity')
-ax2.set_title('Velocity Sigma Points in 3D Space')
+ax2.set_title('Velocity Sigma Points in 3D Space with 3-Sigma Ellipsoid')
 ax2.legend()
 
 plt.tight_layout()
 plt.show()
+
 
 # Now select times based on time_steps
 time = [backTspan[time_steps[i]] for i in range(num_time_steps)]
