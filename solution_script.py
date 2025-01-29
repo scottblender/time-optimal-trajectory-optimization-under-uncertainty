@@ -16,7 +16,7 @@ import mee2rv
 mu_s = 132712 * 10**6 * 1e9
 
 # Compute the nominal trajectory parameters
-p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
+p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU,TU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
 
 # Number of bundles to generate
 num_bundles = 100
@@ -84,7 +84,6 @@ beta = 2.  # UKF parameter
 kappa = float(3 - nsd)  # UKF parameter
 alpha = 1.7215  # UKF parameter
 lambda_ = alpha**2 * (nsd + kappa) - nsd  # UKF scaling parameter
-print(lambda_)
 
 # Create weights for the sigma points using the MerweScaledSigmaPoints class
 weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
@@ -101,7 +100,7 @@ for row in P_combined:
     print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places for more precisi
 
 # Define the time steps for which sigma points will be generated
-num_time_steps = 5
+num_time_steps = 1000
 time_steps = np.linspace(0, len(backTspan) - 1, num_time_steps, dtype=int)
 num_points = time_steps.shape[0]
 
@@ -283,7 +282,7 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
     # List to store the sigma points trajectories for the current bundle
     bundle_trajectories = []
 
-    for j in range(num_time_steps - 1):  # Loop over time steps (ensure range is valid)
+    for j in range(20):  # Loop over time steps (ensure range is valid)
         # Define the start and end times for the integration
         tstart = time[j]
         tend = time[j + 1]
@@ -443,11 +442,12 @@ random_bundle_idx = random.randint(0, 3)  # Choose a random index between 0 and 
 random_trajectory = trajectories[random_bundle_idx]  # Shape: (time_steps, sigma_points, trajectory_length, 6)
 
 # Loop through each time step and sigma point to print the start and end positions and velocities
-num_time_steps = random_trajectory.shape[0]
+random_time_steps = np.random.randint(0,(random_trajectory.shape[0]-1),size=5)
+print(random_time_steps)
 num_sigma_points = random_trajectory.shape[1]
 
 # Loop through each time step and sigma point to print the start and end positions and velocities
-for t_idx in range(num_time_steps):
+for t_idx in random_time_steps:
     print(f"Time Step {t_idx}:")
     for sigma_idx in range(num_sigma_points):
         # Extract position and velocity for the current sigma point
@@ -468,7 +468,7 @@ for t_idx in range(num_time_steps):
         print(f"    End Velocity: {end_vel}")
 
 # Create a subplot for each time step (3D subplots for each time step)
-fig, axes = plt.subplots(1, num_time_steps, figsize=(15, 5), subplot_kw={'projection': '3d'})
+fig, axes = plt.subplots(1, random_time_steps.shape[0], figsize=(15, 5), subplot_kw={'projection': '3d'})
 
 # If there's only one time step, axes will not be a list, so we make it iterable
 if num_time_steps == 1:

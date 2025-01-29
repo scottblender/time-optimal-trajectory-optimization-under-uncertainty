@@ -119,4 +119,4 @@ def compute_nominal_trajectory_params():
     tfound = 0.5 * ((tf_g_UB + tf_g_LB) + (tf_g_UB - tf_g_LB) * np.sin(wrapTo2Pi.wrapTo2Pi(p_sol[-1])))
 
     # Return the optimized solution (p_sol), final time of flight (tfound), and the requested parameters
-    return p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU
+    return p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU,TU
