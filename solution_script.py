@@ -82,7 +82,7 @@ plt.show()
 nsd = 6  # Dimensionality of the state (3D position and 3D velocity combined)
 beta = 2.  # UKF parameter
 kappa = float(3 - nsd)  # UKF parameter
-alpha = 1.  # UKF parameter
+alpha = 1.7215  # UKF parameter
 lambda_ = alpha**2 * (nsd + kappa) - nsd  # UKF scaling parameter
 print(lambda_)
 
@@ -94,8 +94,6 @@ P_combined = np.block([
     [np.eye(nsd//2) * 0.01, np.zeros((nsd//2, nsd//2))],  # Position covariance with zero velocity covariance
     [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]  # Velocity covariance
 ])
-
-#print(weights.sigma_points(np.hstack([r_nom[0,:],v_nom[0,:]]),P_combined))
 
 # Print the matrix
 print("Covariance Matrix (P_combined):")
@@ -215,6 +213,63 @@ ax2.legend()
 plt.tight_layout()
 plt.show()
 
+# --- Calculate Mahalanobis Distances ---
+# Get the position part of the covariance matrix and nominal point
+covariance_position = P_combined[:3, :3]  # Position part of covariance
+nominal_position = sigmas_combined[0, 0, :, 0][:3]  # First sigma point, nominal position
+
+# Get the perturbed sigma points for position (all sigma points except the center one)
+position_sigma_points = sigmas_combined[0, 1:, :, 0][:, :3]  # Remove the nominal point from the set
+
+# Inverse of the covariance matrix
+covariance_inv_position = np.linalg.inv(covariance_position)
+
+# Calculate Mahalanobis distances for position sigma points
+mahalanobis_distances_position = []
+for point in position_sigma_points:
+    diff = point - nominal_position
+    dist = np.sqrt(diff.T @ covariance_inv_position @ diff)  # Mahalanobis distance
+    mahalanobis_distances_position.append(dist)
+
+# Get the velocity part of the covariance matrix and nominal point
+covariance_velocity = P_combined[3:, 3:]  # Velocity part of covariance
+nominal_velocity = sigmas_combined[0, 0, :, 0][3:]  # First sigma point, nominal velocity
+
+# Get the perturbed sigma points for velocity
+velocity_sigma_points = sigmas_combined[0, 1:, :, 0][:, 3:]  # Remove the nominal point for velocity
+
+# Inverse of the covariance matrix for velocity
+covariance_inv_velocity = np.linalg.inv(covariance_velocity)
+
+# Calculate Mahalanobis distances for velocity sigma points
+mahalanobis_distances_velocity = []
+for point in velocity_sigma_points:
+    diff = point - nominal_velocity
+    dist = np.sqrt(diff.T @ covariance_inv_velocity @ diff)  # Mahalanobis distance
+    mahalanobis_distances_velocity.append(dist)
+
+# --- Plotting ---
+# Plot the Mahalanobis distances for position sigma points
+plt.figure(figsize=(12, 6))
+plt.subplot(121)
+plt.plot(mahalanobis_distances_position, 'bo-', label='Mahalanobis Distance (Position)')
+plt.title('Mahalanobis Distances for Position Sigma Points')
+plt.xlabel('Sigma Point Index')
+plt.ylabel('Mahalanobis Distance')
+plt.grid(True)
+plt.legend()
+
+# Plot the Mahalanobis distances for velocity sigma points
+plt.subplot(122)
+plt.plot(mahalanobis_distances_velocity, 'ro-', label='Mahalanobis Distance (Velocity)')
+plt.title('Mahalanobis Distances for Velocity Sigma Points')
+plt.xlabel('Sigma Point Index')
+plt.ylabel('Mahalanobis Distance')
+plt.grid(True)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
 
 # Now select times based on time_steps
 time = [backTspan[time_steps[i]] for i in range(num_time_steps)]
