@@ -282,7 +282,7 @@ for i in range(num_bundles):  # Loop over each bundle (adjust based on your need
     # List to store the sigma points trajectories for the current bundle
     bundle_trajectories = []
 
-    for j in range(20):  # Loop over time steps (ensure range is valid)
+    for j in range(5):  # Loop over time steps (ensure range is valid)
         # Define the start and end times for the integration
         tstart = time[j]
         tend = time[j + 1]
@@ -375,7 +375,35 @@ trajectories = np.array(trajectories)
 # Ensure that the shape of the trajectories is (4, 2, 13, 1000, 6)
 print("Shape of trajectories:", trajectories.shape)  # Should be (4, 2, 13, 1000, 6)
 
-# Ensure that the random indices do not exceed the bounds
+# Initialize a list to store the Mahalanobis distances for all bundles and time steps
+mahalanobis_distances = []
+
+# Loop over the bundles and time steps to calculate the Mahalanobis distance
+for i in range(num_bundles):  # Loop over each bundle
+    for j in range(5):  # Loop over each time step
+        
+        # Extract the nominal trajectory (we assume the first sigma point of the first bundle is the nominal)
+        nominal_trajectory = trajectories[i,j,0,:,:]  # First sigma point (unperturbed) for this bundle and time step
+
+        # Loop over each perturbed trajectory (sigma points)
+        for sigma_idx in range(trajectories.shape[2]):  # Loop through the 13 sigma points at time step j
+            perturbed_trajectory = trajectories[i,j,sigma_idx,:,:]  # Shape: (6,) [position, velocity]
+
+            # Compute the difference between the perturbed trajectory and the nominal trajectory
+            diff = perturbed_trajectory - nominal_trajectory  # Shape: (6,)
+            
+            # Loop over each row
+            for row in range(trajectories.shape[3]):
+                # Calculate the Mahalanobis distance for this perturbed trajectory
+                mahalanobis_dist = np.sqrt(np.dot(diff[row,:].T, np.linalg.inv(P_combined).dot(diff[row,:])))
+                
+                # Store the Mahalanobis distance
+                mahalanobis_distances.append(mahalanobis_dist)
+
+# Convert the list of Mahalanobis distances to a NumPy array
+mahalanobis_distances = np.array(mahalanobis_distances)
+
+#  Ensure that the random indices do not exceed the bounds
 random_indices = random.sample(range(trajectories.shape[0]), 4)
 
 # Create a subplot figure (2x2 grid for 4 random original trajectories)
