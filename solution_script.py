@@ -1,16 +1,14 @@
 import numpy as np
 import random
 import matplotlib.pyplot as plt
-import scipy
 import pandas as pd
-from mpl_toolkits.mplot3d import Axes3D  # For 3D plotting
-from filterpy.kalman import MerweScaledSigmaPoints
+import mpl_toolkits.mplot3d # For 3D Plotting
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
+import generate_sigma_points
 import evaluate_bundle_widths
-import odefunc
-import rv2mee
-import mee2rv
+import solve_trajectories
+
 
 # Gravitational parameter for the Sun
 mu_s = 132712 * 10**6 * 1e9
@@ -78,55 +76,21 @@ plt.axis('equal')
 ax.legend()
 plt.show()
 
-# Parameters for the sigma point generation process
-nsd = 6  # Dimensionality of the state (3D position and 3D velocity combined)
-beta = 2.  # UKF parameter
-kappa = float(3 - nsd)  # UKF parameter
-alpha = 1.7215  # UKF parameter
-lambda_ = alpha**2 * (nsd + kappa) - nsd  # UKF scaling parameter
-
-# Create weights for the sigma points using the MerweScaledSigmaPoints class
-weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
 
 # Define the initial covariance matrix for position and velocity (combined state)
-P_combined = np.block([
-    [np.eye(nsd//2) * 0.01, np.zeros((nsd//2, nsd//2))],  # Position covariance with zero velocity covariance
-    [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]  # Velocity covariance
-])
+nsd = 6
+P_pos = [np.eye(nsd//2) * 0.01, np.zeros((nsd//2, nsd//2))]
+P_vel =  [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]
+
+
+# Run external function to generate sigma points
+sigmas_combined, P_combined, time_steps, num_time_steps = generate_sigma_points.generate_sigma_points(nsd=nsd, alpha=1.7215, beta=2., kappa=float(3-nsd), P_pos = P_pos, P_vel = P_vel, num_time_steps=1000, backTspan=backTspan, r_bundles=r_bundles, v_bundles=v_bundles)
 
 # Print the matrix
 print("Covariance Matrix (P_combined):")
 for row in P_combined:
     print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places for more precisi
 
-# Define the time steps for which sigma points will be generated
-num_time_steps = 1000
-time_steps = np.linspace(0, len(backTspan) - 1, num_time_steps, dtype=int)
-num_points = time_steps.shape[0]
-
-# Create placeholders for storing the sigma points (7 for each bundle)
-sigmas_combined = np.zeros((num_bundles, 2 * nsd + 1, nsd, num_points))  # For position and velocity combined
-
-# Compute the Cholesky decomposition of the scaled covariance matrix for the combined state
-U_combined = scipy.linalg.cholesky((nsd + lambda_) * P_combined)  # For combined state
-print("Cholesky Decomposition Matrix (U_combined):")
-for row in U_combined:
-    print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places for more precisi
-
-# Loop over each bundle to generate sigma points for the combined state and time step
-for i in range(num_bundles):
-    for j in range(num_points):
-        # Get the nominal combined state (position and velocity) for the current time step
-        nominal_combined = np.concatenate([r_bundles[time_steps[j], :, i], v_bundles[time_steps[j], :, i]])
-        
-        # Set the center sigma point (nominal combined state)
-        sigmas_combined[i, 0, :, j] = nominal_combined
-        
-        # Generate sigma points in the positive and negative directions for each dimension (x, y, z, vx, vy, vz)
-        for k in range(nsd):
-            #sigmas_combined[i, k+1, :, j] = nominal_combined + U_combined[k]  # Perturb positive
-            #sigmas_combined[i, nsd+k+1, :, j] = nominal_combined - U_combined[k]  # Perturb negative
-            sigmas_combined[i,:,:,j] = weights.sigma_points(nominal_combined,P_combined)
 # Example: Print the sigma points for the first bundle (i = 0) at the first time step (j = 0)
 bundle_idx = 0
 time_step_idx = 0
@@ -270,138 +234,110 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-# Now select times based on time_steps
-time = [backTspan[time_steps[i]] for i in range(num_time_steps)]
-time = time[::-1]
+# Call external function to solve new IVPs
+trajectories, P_combined_history = solve_trajectories.solve_trajectories_with_covariance(
+    backTspan=backTspan, 
+    time_steps=time_steps, 
+    num_time_steps=num_time_steps, 
+    num_bundles=num_bundles, 
+    sigmas_combined=sigmas_combined, 
+    new_lam_bundles=new_lam_bundles, 
+    mu=mu, 
+    F=F, 
+    c=c, 
+    m0=m0, 
+    g0=g0,
+    P_combined_initial=P_combined
+)
 
-# Initialize an empty list to store trajectories for all bundles
-trajectories = []
+# Select the bundle index (e.g., bundle 0)
+bundle_index = 0
 
-# Loop over each bundle and each time step to solve the IVP
-for i in range(num_bundles):  # Loop over each bundle (adjust based on your needs)
-    # List to store the sigma points trajectories for the current bundle
-    bundle_trajectories = []
+# Select the time steps you want to plot (this will correspond to the indices of time steps)
+# For example, plot for the first 5 time steps
+time_indices = range(5)
 
-    for j in range(5):  # Loop over time steps (ensure range is valid)
-        # Define the start and end times for the integration
-        tstart = time[j]
-        tend = time[j + 1]
+# Extract the covariance history for the selected bundle
+P_combined_bundle = P_combined_history[bundle_index, time_indices, :, :]
 
-        # Extract the current sigma points for position and velocity (combined state)
-        sigma_combined = sigmas_combined[i, :, :, j]  # Shape: (13, 6)
+# Initialize lists to store the diagonal elements (variances) of the covariance matrix over time
+position_variances = []
+velocity_variances = []
 
-        # List to store the trajectories for all sigma points at the current time step
-        sigma_point_trajectories = []
+# Loop over the selected time indices and extract the diagonal elements (variances)
+for i in range(len(time_indices)):
+    P = P_combined_bundle[i, :, :]
+
+    # Print the covariance matrix P for the current time index in a formatted manner
+    print(f"Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}:")
+    for row in P:
+        print("  ".join(f"{val: .8f}" for val in row))  # Format each value to 8 decimal places
+   
+    # Extract the diagonal elements of the covariance matrix (position and velocity variances)
+    position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
+    velocity_variances.append([P[3, 3], P[4, 4], P[5, 5]])  # Variance of velocity (vx, vy, vz)
+
+# Convert lists to numpy arrays for easier plotting
+position_variances = np.array(position_variances)
+velocity_variances = np.array(velocity_variances)
+
+# Plot the variances over time
+plt.figure(figsize=(10, 6))
+
+# Plot the position variances (x, y, z)
+plt.subplot(2, 1, 1)
+plt.plot(time_indices, position_variances[:, 0], label="Variance in X Position", color='b')
+plt.plot(time_indices, position_variances[:, 1], label="Variance in Y Position", color='g')
+plt.plot(time_indices, position_variances[:, 2], label="Variance in Z Position", color='r')
+plt.xlabel('Time Step')
+plt.ylabel('Position Variance')
+plt.title(f'Evolution of Position Variance for Bundle {bundle_index}')
+plt.legend()
+
+# Plot the velocity variances (vx, vy, vz)
+plt.subplot(2, 1, 2)
+plt.plot(time_indices, velocity_variances[:, 0], label="Variance in X Velocity", color='b')
+plt.plot(time_indices, velocity_variances[:, 1], label="Variance in Y Velocity", color='g')
+plt.plot(time_indices, velocity_variances[:, 2], label="Variance in Z Velocity", color='r')
+plt.xlabel('Time Step')
+plt.ylabel('Velocity Variance')
+plt.title(f'Evolution of Velocity Variance for Bundle {bundle_index}')
+plt.legend()
+
+# Show the plots
+plt.tight_layout()
+plt.show()
+
+# # Ensure that the shape of the trajectories is (4, 2, 13, 1000, 6)
+# print("Shape of trajectories:", trajectories.shape)  # Should be (4, 2, 13, 1000, 6)
+
+# # Initialize a list to store the Mahalanobis distances for all bundles and time steps
+# mahalanobis_distances = []
+
+# # Loop over the bundles and time steps to calculate the Mahalanobis distance
+# for i in range(num_bundles):  # Loop over each bundle
+#     for j in range(5):  # Loop over each time step
         
-        # Find the closest index in backTspan for the current time step
-        time_index = np.argmin(np.abs(backTspan - time[j]))
-        #print(f"Time Index: {time_index}")
+#         # Extract the nominal trajectory (we assume the first sigma point of the first bundle is the nominal)
+#         nominal_trajectory = trajectories[i,j,0,:,:]  # First sigma point (unperturbed) for this bundle and time step
 
-        # Extract the lamperture values (new_lam) at the current time step for the current bundle
-        new_lam = new_lam_bundles[time_index, :, i]  # Extract 7 elements for lamperture at time step j for bundle i
+#         # Loop over each perturbed trajectory (sigma points)
+#         for sigma_idx in range(trajectories.shape[2]):  # Loop through the 13 sigma points at time step j
+#             perturbed_trajectory = trajectories[i,j,sigma_idx,:,:]  # Shape: (6,) [position, velocity]
 
-        # Loop over the sigma points
-        for sigma_idx in range(sigma_combined.shape[0]):  # Loop through the 13 sigma points
-            # Extract position and velocity from the combined sigma point
-            r0 = sigma_combined[sigma_idx, :3]  # First 3 elements are position
-            v0 = sigma_combined[sigma_idx, 3:]  # Last 3 elements are velocity
-
-            # Convert the position and velocity to modified equinoctial elements
-            initial_state = rv2mee.rv2mee(np.array([r0]), np.array([v0]), mu)
-            initial_state = np.append(initial_state, np.array([1]), axis=0)  # Append the 1 element for perturbation
-            S = np.append(initial_state, new_lam)  # Append the lamperture values (new_lam)
-
-            # Print the initial conditions for this sigma point (before integration)
-            # print(f"Initial conditions for sigma point {sigma_idx+1} (Bundle {i+1}, Time Step {j+1}):")
-            # print(f"  Position (r0): {r0}")
-            # print(f"  Velocity (v0): {v0}")
-            # print(f"  Lamperture values: {new_lam}")
-            # print(f"  Combined state (S): {S}")
-
-            # Define the ODE function for integration
-            func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
-
-            # Define the time span for the ODE solver
-            tspan = np.linspace(tstart, tend, 1000)
-
-            try:
-                # Solve the ODE using RK45 method
-                Sf = scipy.integrate.solve_ivp(func, [tstart, tend], S, method='RK45', rtol=1e-6, atol=1e-8, t_eval=tspan)
-
-                # If the solution is successful, convert the MEE back to RV
-                if Sf.success:
-                    r_new, v_new = mee2rv.mee2rv(Sf.y[0, :], Sf.y[1, :], Sf.y[2, :], Sf.y[3, :], Sf.y[4, :], Sf.y[5, :], mu)
-                    
-                    # Print the initial state S before passing to solve_ivp
-                    # print(f"Initial state (S) for sigma point {sigma_idx+1}: {S}")
-
-                    # Print the solution at the first time step (tstart)
-                    # print(f"Solution at tstart ({tstart}): {Sf.y[:, 0]}")
-                    
-                    # Print the solution for this sigma point
-                    # print(f"Solution for sigma point {sigma_idx+1} (Bundle {i+1}, Time Step {j+1}):")
-                    # print(f"  Final position (r_new): {r_new}")
-                    # print(f"  Final velocity (v_new): {v_new}")
-                    
-                    # Compute the position error (Euclidean norm of the difference between initial and final position)
-                    position_error = np.linalg.norm(r0 - r_new,axis=1)
-
-                    # Compute the velocity error (Euclidean norm of the difference between initial and final velocity)
-                    velocity_error = np.linalg.norm(v0 - v_new,axis=1)
-                    
-                    # Check if the initial and final positions/velocities are close
-                    #print(f"Position error: {position_error[0]}")
-                    #rint(f"Velocity error: {velocity_error[0]}")
-
-                    # Print the shape of the solution Sf
-                    #print(f"Shape of Sf (solution for sigma point {sigma_idx+1}, Bundle {i+1}, Time Step {j+1}):")
-                    #print(Sf.y.shape)
-
-                    # Store both position and velocity for the current sigma point at each time step
-                    trajectory = np.hstack((r_new, v_new))  # Combine position (r_new) and velocity (v_new)
-                    sigma_point_trajectories.append(trajectory)
-            except Exception as e:
-                continue  # In case of error, continue with the next sigma point
-
-        # Append the trajectories of all sigma points at this time step to the bundle
-        bundle_trajectories.append(sigma_point_trajectories)
-
-    # Append the trajectories for the entire bundle
-    trajectories.append(bundle_trajectories)
-
-# Convert trajectories to a numpy array
-trajectories = np.array(trajectories)
-
-# Ensure that the shape of the trajectories is (4, 2, 13, 1000, 6)
-print("Shape of trajectories:", trajectories.shape)  # Should be (4, 2, 13, 1000, 6)
-
-# Initialize a list to store the Mahalanobis distances for all bundles and time steps
-mahalanobis_distances = []
-
-# Loop over the bundles and time steps to calculate the Mahalanobis distance
-for i in range(num_bundles):  # Loop over each bundle
-    for j in range(5):  # Loop over each time step
-        
-        # Extract the nominal trajectory (we assume the first sigma point of the first bundle is the nominal)
-        nominal_trajectory = trajectories[i,j,0,:,:]  # First sigma point (unperturbed) for this bundle and time step
-
-        # Loop over each perturbed trajectory (sigma points)
-        for sigma_idx in range(trajectories.shape[2]):  # Loop through the 13 sigma points at time step j
-            perturbed_trajectory = trajectories[i,j,sigma_idx,:,:]  # Shape: (6,) [position, velocity]
-
-            # Compute the difference between the perturbed trajectory and the nominal trajectory
-            diff = perturbed_trajectory - nominal_trajectory  # Shape: (6,)
+#             # Compute the difference between the perturbed trajectory and the nominal trajectory
+#             diff = perturbed_trajectory - nominal_trajectory  # Shape: (6,)
             
-            # Loop over each row
-            for row in range(trajectories.shape[3]):
-                # Calculate the Mahalanobis distance for this perturbed trajectory
-                mahalanobis_dist = np.sqrt(np.dot(diff[row,:].T, np.linalg.inv(P_combined).dot(diff[row,:])))
+#             # Loop over each row
+#             for row in range(trajectories.shape[3]):
+#                 # Calculate the Mahalanobis distance for this perturbed trajectory
+#                 mahalanobis_dist = np.sqrt(np.dot(diff[row,:].T, np.linalg.inv(P_combined).dot(diff[row,:])))
                 
-                # Store the Mahalanobis distance
-                mahalanobis_distances.append(mahalanobis_dist)
+#                 # Store the Mahalanobis distance
+#                 mahalanobis_distances.append(mahalanobis_dist)
 
-# Convert the list of Mahalanobis distances to a NumPy array
-mahalanobis_distances = np.array(mahalanobis_distances)
+# # Convert the list of Mahalanobis distances to a NumPy array
+# mahalanobis_distances = np.array(mahalanobis_distances)
 
 #  Ensure that the random indices do not exceed the bounds
 random_indices = random.sample(range(trajectories.shape[0]), 4)
