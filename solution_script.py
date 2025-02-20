@@ -8,7 +8,6 @@ import compute_bundle_trajectory_params
 import generate_sigma_points
 import evaluate_bundle_widths
 import solve_trajectories
-import compute_pdf_for_bundles
 
 # Gravitational parameter for the Sun
 mu_s = 132712 * 10**6 * 1e9
@@ -311,35 +310,8 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-# Compute the PDF history for the specific bundle
-pdf_history = compute_pdf_for_bundles.compute_pdf_for_bundles(trajectories, P_combined_history, num_bundles, num_time_steps=num_time_steps)
-
-# Select a bundle and time step to plot
-bundle_index = 0  # First bundle
-time_step_index = 0  # First time step
-
-# Get the PDF values for the selected bundle and time step
-pdf_values = pdf_history[bundle_index, time_step_index]
-
-# Create a list of state names (for x, y, z, vx, vy, and vz)
-states = ['x', 'y', 'z', 'vx', 'vy', 'vz']
-
-# Plot the PDFs for each state
-plt.figure(figsize=(12, 8))
-
-for i in range(6):  # Loop over the 6 states
-    plt.subplot(2, 3, i+1)  # Create subplots (2 rows, 3 columns)
-    plt.plot(np.arange(1, len(pdf_values[i]) + 1), pdf_values[i], marker='o', linestyle='-', color='b')
-    plt.title(f"PDF for State {states[i]} (Bundle {bundle_index+1}, Time Step {time_step_index+1})")
-    plt.xlabel('Sigma Point Index')
-    plt.ylabel('PDF Value')
-    plt.grid(True)
-
-plt.tight_layout()
-plt.show()
-
-# # Ensure that the shape of the trajectories is (4, 2, 13, 1000, 6)
-# print("Shape of trajectories:", trajectories.shape)  # Should be (4, 2, 13, 1000, 6)
+# Print the shape of trajectories
+print("Shape of trajectories:", trajectories.shape)  
 
 # # Initialize a list to store the Mahalanobis distances for all bundles and time steps
 # mahalanobis_distances = []
