@@ -2,6 +2,7 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 import pandas as pd
+import seaborn as sns
 from scipy.stats import multivariate_normal
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
