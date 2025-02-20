@@ -21,7 +21,7 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
         bundle_trajectories = []
 
         # Loop over the time steps and initialize the covariance for each time step
-        for j in range(5):  # Loop over time steps (ensure range is valid)
+        for j in range(num_time_steps-1):  # Loop over time steps (ensure range is valid)
             # Define the start and end times for the integration
             tstart = time[j]
             tend = time[j + 1]

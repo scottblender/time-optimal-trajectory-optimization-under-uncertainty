@@ -2,13 +2,13 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 import pandas as pd
-import mpl_toolkits.mplot3d # For 3D Plotting
+from scipy.stats import multivariate_normal
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import generate_sigma_points
 import evaluate_bundle_widths
 import solve_trajectories
-
+import compute_pdf_for_bundles
 
 # Gravitational parameter for the Sun
 mu_s = 132712 * 10**6 * 1e9
@@ -84,7 +84,7 @@ P_vel =  [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]
 
 
 # Run external function to generate sigma points
-sigmas_combined, P_combined, time_steps, num_time_steps = generate_sigma_points.generate_sigma_points(nsd=nsd, alpha=1.7215, beta=2., kappa=float(3-nsd), P_pos = P_pos, P_vel = P_vel, num_time_steps=1000, backTspan=backTspan, r_bundles=r_bundles, v_bundles=v_bundles)
+sigmas_combined, P_combined, time_steps, num_time_steps_ = generate_sigma_points.generate_sigma_points(nsd=nsd, alpha=1.7215, beta=2., kappa=float(3-nsd), P_pos = P_pos, P_vel = P_vel, num_time_steps=1000, backTspan=backTspan, r_bundles=r_bundles, v_bundles=v_bundles)
 
 # Print the matrix
 print("Covariance Matrix (P_combined):")
@@ -234,11 +234,14 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
+# define dummy value for num_time_steps
+num_time_steps = 6
+
 # Call external function to solve new IVPs
 trajectories, P_combined_history = solve_trajectories.solve_trajectories_with_covariance(
     backTspan=backTspan, 
     time_steps=time_steps, 
-    num_time_steps=num_time_steps, 
+    num_time_steps=num_time_steps, # fix later, but 5 time steps computed
     num_bundles=num_bundles, 
     sigmas_combined=sigmas_combined, 
     new_lam_bundles=new_lam_bundles, 
@@ -305,6 +308,33 @@ plt.title(f'Evolution of Velocity Variance for Bundle {bundle_index}')
 plt.legend()
 
 # Show the plots
+plt.tight_layout()
+plt.show()
+
+# Compute the PDF history for the specific bundle
+pdf_history = compute_pdf_for_bundles.compute_pdf_for_bundles(trajectories, P_combined_history, num_bundles, num_time_steps=num_time_steps)
+
+# Select a bundle and time step to plot
+bundle_index = 0  # First bundle
+time_step_index = 0  # First time step
+
+# Get the PDF values for the selected bundle and time step
+pdf_values = pdf_history[bundle_index, time_step_index]
+
+# Create a list of state names (for x, y, z, vx, vy, and vz)
+states = ['x', 'y', 'z', 'vx', 'vy', 'vz']
+
+# Plot the PDFs for each state
+plt.figure(figsize=(12, 8))
+
+for i in range(6):  # Loop over the 6 states
+    plt.subplot(2, 3, i+1)  # Create subplots (2 rows, 3 columns)
+    plt.plot(np.arange(1, len(pdf_values[i]) + 1), pdf_values[i], marker='o', linestyle='-', color='b')
+    plt.title(f"PDF for State {states[i]} (Bundle {bundle_index+1}, Time Step {time_step_index+1})")
+    plt.xlabel('Sigma Point Index')
+    plt.ylabel('PDF Value')
+    plt.grid(True)
+
 plt.tight_layout()
 plt.show()
 
