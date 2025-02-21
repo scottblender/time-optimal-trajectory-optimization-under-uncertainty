@@ -2,13 +2,12 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
-from scipy.stats import multivariate_normal
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import generate_sigma_points
 import evaluate_bundle_widths
 import solve_trajectories
+import pdf_determination
 
 # Gravitational parameter for the Sun
 mu_s = 132712 * 10**6 * 1e9
@@ -314,33 +313,12 @@ plt.show()
 # Print the shape of trajectories
 print("Shape of trajectories:", trajectories.shape)  
 
-# # Initialize a list to store the Mahalanobis distances for all bundles and time steps
-# mahalanobis_distances = []
+# Select a specific bundle and time step to plot
+bundle_idx = 0  # Select the first bundle (you can change this)
+time_step_idx = 4  # Select the 6th time step (you can change this)
 
-# # Loop over the bundles and time steps to calculate the Mahalanobis distance
-# for i in range(num_bundles):  # Loop over each bundle
-#     for j in range(5):  # Loop over each time step
-        
-#         # Extract the nominal trajectory (we assume the first sigma point of the first bundle is the nominal)
-#         nominal_trajectory = trajectories[i,j,0,:,:]  # First sigma point (unperturbed) for this bundle and time step
-
-#         # Loop over each perturbed trajectory (sigma points)
-#         for sigma_idx in range(trajectories.shape[2]):  # Loop through the 13 sigma points at time step j
-#             perturbed_trajectory = trajectories[i,j,sigma_idx,:,:]  # Shape: (6,) [position, velocity]
-
-#             # Compute the difference between the perturbed trajectory and the nominal trajectory
-#             diff = perturbed_trajectory - nominal_trajectory  # Shape: (6,)
-            
-#             # Loop over each row
-#             for row in range(trajectories.shape[3]):
-#                 # Calculate the Mahalanobis distance for this perturbed trajectory
-#                 mahalanobis_dist = np.sqrt(np.dot(diff[row,:].T, np.linalg.inv(P_combined).dot(diff[row,:])))
-                
-#                 # Store the Mahalanobis distance
-#                 mahalanobis_distances.append(mahalanobis_dist)
-
-# # Convert the list of Mahalanobis distances to a NumPy array
-# mahalanobis_distances = np.array(mahalanobis_distances)
+# Plot the PDF distributions using KDE for the selected bundle and time step
+pdf_determination.plot_pdf_with_kde(trajectories, bundle_idx, time_step_idx)
 
 #  Ensure that the random indices do not exceed the bounds
 random_indices = random.sample(range(trajectories.shape[0]), 4)
