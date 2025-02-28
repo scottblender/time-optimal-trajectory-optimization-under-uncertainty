@@ -2,6 +2,7 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 import pandas as pd
+import joblib
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import generate_sigma_points
@@ -252,6 +253,9 @@ trajectories, P_combined_history = solve_trajectories.solve_trajectories_with_co
     P_combined_initial=P_combined
 )
 
+# Save the data
+joblib.dump({'trajectories': trajectories, 'P_combined_history': P_combined_history}, 'data.pkl')
+
 # Select the bundle index (e.g., bundle 0)
 bundle_index = 0
 
@@ -388,7 +392,6 @@ random_trajectory = trajectories[random_bundle_idx]  # Shape: (time_steps, sigma
 
 # Loop through each time step and sigma point to print the start and end positions and velocities
 random_time_steps = np.random.randint(0,(random_trajectory.shape[0]-1),size=5)
-print(random_time_steps)
 num_sigma_points = random_trajectory.shape[1]
 
 # Loop through each time step and sigma point to print the start and end positions and velocities
