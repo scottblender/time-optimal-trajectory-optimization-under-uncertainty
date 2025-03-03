@@ -8,7 +8,7 @@ import compute_bundle_trajectory_params
 import generate_sigma_points
 import evaluate_bundle_widths
 import solve_trajectories
-import pdf_determination
+import mc_samples
 
 # Gravitational parameter for the Sun
 mu_s = 132712 * 10**6 * 1e9
@@ -84,7 +84,7 @@ P_vel =  [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]
 
 
 # Run external function to generate sigma points
-sigmas_combined, P_combined, time_steps, num_time_steps_ = generate_sigma_points.generate_sigma_points(nsd=nsd, alpha=1.7215, beta=2., kappa=float(3-nsd), P_pos = P_pos, P_vel = P_vel, num_time_steps=1000, backTspan=backTspan, r_bundles=r_bundles, v_bundles=v_bundles)
+sigmas_combined, P_combined, time_steps, num_time_steps_, W_m, W_c = generate_sigma_points.generate_sigma_points(nsd=nsd, alpha=1.7215, beta=2., kappa=float(3-nsd), P_pos = P_pos, P_vel = P_vel, num_time_steps=1000, backTspan=backTspan, r_bundles=r_bundles, v_bundles=v_bundles)
 
 # Print the matrix
 print("Covariance Matrix (P_combined):")
@@ -238,7 +238,7 @@ plt.show()
 num_time_steps = 6
 
 # Call external function to solve new IVPs
-trajectories, P_combined_history = solve_trajectories.solve_trajectories_with_covariance(
+trajectories, P_combined_history, means_history = solve_trajectories.solve_trajectories_with_covariance(
     backTspan=backTspan, 
     time_steps=time_steps, 
     num_time_steps=num_time_steps, # fix later, but 5 time steps computed
@@ -250,21 +250,24 @@ trajectories, P_combined_history = solve_trajectories.solve_trajectories_with_co
     c=c, 
     m0=m0, 
     g0=g0,
-    P_combined_initial=P_combined
+    Wm= W_m,
+    Wc = W_c
 )
 
 # Save the data
-joblib.dump({'trajectories': trajectories, 'P_combined_history': P_combined_history}, 'data.pkl')
+joblib.dump({'trajectories': trajectories, 'P_combined_history': P_combined_history, 'means_history': means_history}, 'data.pkl')
 
 # Select the bundle index (e.g., bundle 0)
 bundle_index = 0
 
 # Select the time steps you want to plot (this will correspond to the indices of time steps)
-# For example, plot for the first 5 time steps
 time_indices = range(5)
 
-# Extract the covariance history for the selected bundle
-P_combined_bundle = P_combined_history[bundle_index, time_indices, :, :]
+# Select the integration point index to inspect (e.g., first integration point)
+integration_point_idx = 50  
+
+# Extract the covariance history for the selected bundle and integration point
+P_combined_bundle = P_combined_history[bundle_index, time_indices, integration_point_idx, :, :]
 
 # Initialize lists to store the diagonal elements (variances) of the covariance matrix over time
 position_variances = []
@@ -272,12 +275,12 @@ velocity_variances = []
 
 # Loop over the selected time indices and extract the diagonal elements (variances)
 for i in range(len(time_indices)):
-    P = P_combined_bundle[i, :, :]
+    P = P_combined_bundle[i]  # Shape: (6, 6)
 
     # Print the covariance matrix P for the current time index in a formatted manner
-    print(f"Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}:")
+    print(f"Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}, Integration Point {integration_point_idx+1}:")
     for row in P:
-        print("  ".join(f"{val: .8f}" for val in row))  # Format each value to 8 decimal places
+        print("  ".join(f"{val:.8f}" for val in row))  # Format each value to 8 decimal places
    
     # Extract the diagonal elements of the covariance matrix (position and velocity variances)
     position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
@@ -317,12 +320,12 @@ plt.show()
 # Print the shape of trajectories
 print("Shape of trajectories:", trajectories.shape)  
 
-# Select a specific bundle and time step to plot
-bundle_idx = 0  # Select the first bundle (you can change this)
-time_step_idx = 4  # Select the 6th time step (you can change this)
+# # Select a specific bundle and time step to plot
+# bundle_idx = 0  # Select the first bundle (you can change this)
+# time_step_idx = 4  # Select the 6th time step (you can change this)
 
-# Plot the PDF distributions using KDE for the selected bundle and time step
-pdf_determination.plot_pdf_with_kde(trajectories, bundle_idx, time_step_idx)
+# # Plot the PDF distributions using KDE for the selected bundle and time step
+# pdf_determination.plot_pdf_with_kde(trajectories, bundle_idx, time_step_idx)
 
 #  Ensure that the random indices do not exceed the bounds
 random_indices = random.sample(range(trajectories.shape[0]), 4)
@@ -465,3 +468,87 @@ plt.tight_layout()
 plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
 plt.show()
 
+# Define the number of Monte Carlo samples
+num_samples = 1000  
+
+# Call the Monte Carlo sampling function
+mc_trajectories, mc_means_history, mc_covariances_history = mc_samples.monte_carlo_sub_trajectories(
+    num_samples=num_samples, 
+    backTspan=backTspan, 
+    time_steps=time_steps, 
+    num_time_steps=num_time_steps, 
+    num_bundles=num_bundles, 
+    sigmas_combined=sigmas_combined,  # From sigma point generation
+    P_combined=P_combined,            # Original covariance matrix
+    new_lam_bundles=new_lam_bundles, 
+    mu=mu, 
+    F=F, 
+    c=c, 
+    m0=m0, 
+    g0=g0
+)
+
+# Print shapes to verify outputs
+print("Monte Carlo Trajectories Shape:", mc_trajectories.shape)  # (num_bundles, num_samples, num_time_steps, 1000, 6)
+print("Monte Carlo Means History Shape:", mc_means_history.shape)  # (num_bundles, num_time_steps, 1000, 6)
+print("Monte Carlo Covariances History Shape:", mc_covariances_history.shape)  # (num_bundles, num_time_steps, 1000, 6, 6)
+
+# Select the bundle index (e.g., bundle 0)
+bundle_index = 0
+
+# Select the time steps to print (e.g., first 5 time steps)
+time_indices = range(5)
+
+# Select the integration point index to inspect (e.g., first integration point)
+integration_point_idx = 50  
+
+# Extract the covariance history for the selected bundle and integration point
+P_mc_bundle = mc_covariances_history[bundle_index, time_indices, integration_point_idx, :, :]
+
+# Initialize lists to store diagonal elements (variances) of the covariance matrix over time
+position_variances = []
+velocity_variances = []
+
+# Loop over the selected time indices and extract the diagonal elements (variances)
+for i in range(len(time_indices)):
+    P = P_mc_bundle[i]  # Shape: (6,6)
+
+    # Print the covariance matrix P for the current time index in a formatted manner
+    print(f"Monte Carlo Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}, Integration Point {integration_point_idx+1}:")
+    for row in P:
+        print("  ".join(f"{val:.8f}" for val in row))  # Format each value to 8 decimal places
+   
+    # Extract the diagonal elements of the covariance matrix (position and velocity variances)
+    position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
+    velocity_variances.append([P[3, 3], P[4, 4], P[5, 5]])  # Variance of velocity (vx, vy, vz)
+
+# Convert lists to numpy arrays for easier plotting
+position_variances = np.array(position_variances)
+velocity_variances = np.array(velocity_variances)
+
+# Plot the variances over time
+plt.figure(figsize=(10, 6))
+
+# Plot the position variances (x, y, z)
+plt.subplot(2, 1, 1)
+plt.plot(time_indices, position_variances[:, 0], label="Variance in X Position", color='b')
+plt.plot(time_indices, position_variances[:, 1], label="Variance in Y Position", color='g')
+plt.plot(time_indices, position_variances[:, 2], label="Variance in Z Position", color='r')
+plt.xlabel('Time Step')
+plt.ylabel('Position Variance')
+plt.title(f'Evolution of Monte Carlo Position Variance for Bundle {bundle_index}')
+plt.legend()
+
+# Plot the velocity variances (vx, vy, vz)
+plt.subplot(2, 1, 2)
+plt.plot(time_indices, velocity_variances[:, 0], label="Variance in X Velocity", color='b')
+plt.plot(time_indices, velocity_variances[:, 1], label="Variance in Y Velocity", color='g')
+plt.plot(time_indices, velocity_variances[:, 2], label="Variance in Z Velocity", color='r')
+plt.xlabel('Time Step')
+plt.ylabel('Velocity Variance')
+plt.title(f'Evolution of Monte Carlo Velocity Variance for Bundle {bundle_index}')
+plt.legend()
+
+# Show the plots
+plt.tight_layout()
+plt.show()

@@ -54,4 +54,4 @@ def generate_sigma_points(nsd=None, alpha=None, beta=None, kappa=None, P_pos=Non
             # Generate sigma points using the weights and the covariance matrix
             sigmas_combined[i, :, :, j] = weights.sigma_points(nominal_combined, P_combined)
     
-    return sigmas_combined, P_combined, time_steps, num_time_steps
+    return sigmas_combined, P_combined, time_steps, num_time_steps, weights.Wm, weights.Wc
