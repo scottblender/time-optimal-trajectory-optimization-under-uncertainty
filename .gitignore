@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 get-pip.py
 data.pkl
+*.pkl

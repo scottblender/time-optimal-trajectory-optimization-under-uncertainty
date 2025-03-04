@@ -235,7 +235,7 @@ plt.tight_layout()
 plt.show()
 
 # define dummy value for num_time_steps
-num_time_steps = 6
+num_time_steps = 2
 
 # Call external function to solve new IVPs
 trajectories, P_combined_history, means_history = solve_trajectories.solve_trajectories_with_covariance(
@@ -261,10 +261,10 @@ joblib.dump({'trajectories': trajectories, 'P_combined_history': P_combined_hist
 bundle_index = 0
 
 # Select the time steps you want to plot (this will correspond to the indices of time steps)
-time_indices = range(5)
+time_indices = range(num_time_steps-1)
 
 # Select the integration point index to inspect (e.g., first integration point)
-integration_point_idx = 50  
+integration_point_idx = 0  
 
 # Extract the covariance history for the selected bundle and integration point
 P_combined_bundle = P_combined_history[bundle_index, time_indices, integration_point_idx, :, :]
@@ -327,149 +327,149 @@ print("Shape of trajectories:", trajectories.shape)
 # # Plot the PDF distributions using KDE for the selected bundle and time step
 # pdf_determination.plot_pdf_with_kde(trajectories, bundle_idx, time_step_idx)
 
-#  Ensure that the random indices do not exceed the bounds
-random_indices = random.sample(range(trajectories.shape[0]), 4)
+# #  Ensure that the random indices do not exceed the bounds
+# random_indices = random.sample(range(trajectories.shape[0]), 4)
 
-# Create a subplot figure (2x2 grid for 4 random original trajectories)
-fig = plt.figure(figsize=(12, 12))
+# # Create a subplot figure (2x2 grid for 4 random original trajectories)
+# fig = plt.figure(figsize=(12, 12))
 
-# Loop through the randomly selected indices
-for idx in random_indices:
-    ax = fig.add_subplot(2, 2, random_indices.index(idx) + 1, projection='3d')
-    ax.set_title(f"Original Trajectory {idx} - Uncertainty Propagation")
-    ax.set_xlabel("X Position")
-    ax.set_ylabel("Y Position")
-    ax.set_zlabel("Z Position")
+# # Loop through the randomly selected indices
+# for idx in random_indices:
+#     ax = fig.add_subplot(2, 2, random_indices.index(idx) + 1, projection='3d')
+#     ax.set_title(f"Original Trajectory {idx} - Uncertainty Propagation")
+#     ax.set_xlabel("X Position")
+#     ax.set_ylabel("Y Position")
+#     ax.set_zlabel("Z Position")
 
-    # Loop through all sigma point trajectories for the selected original trajectory
-    for sigma_idx in range(trajectories.shape[2]):  # Loop through the 13 sigma points
-        # Extract the sub-trajectory for the current sigma point from time step t_k to t_{k+1}
-        r_new_and_v_new = trajectories[idx, 0, sigma_idx, :, :]  # (1000, 6) for the 1st time interval
+#     # Loop through all sigma point trajectories for the selected original trajectory
+#     for sigma_idx in range(trajectories.shape[2]):  # Loop through the 13 sigma points
+#         # Extract the sub-trajectory for the current sigma point from time step t_k to t_{k+1}
+#         r_new_and_v_new = trajectories[idx, 0, sigma_idx, :, :]  # (1000, 6) for the 1st time interval
 
-        # Extract position and velocity separately
-        r_new = r_new_and_v_new[:, :3]  # Position (X, Y, Z)
-        v_new = r_new_and_v_new[:, 3:]  # Velocity (Vx, Vy, Vz)
+#         # Extract position and velocity separately
+#         r_new = r_new_and_v_new[:, :3]  # Position (X, Y, Z)
+#         v_new = r_new_and_v_new[:, 3:]  # Velocity (Vx, Vy, Vz)
 
-        # Compare the current trajectory with all previous trajectories for this index
-        for prev_sigma_idx in range(sigma_idx):
-            prev_r_new_and_v_new = trajectories[idx, 0, prev_sigma_idx, :, :]
-            prev_r_new = prev_r_new_and_v_new[:, :3]
-            prev_v_new = prev_r_new_and_v_new[:, 3:]
+#         # Compare the current trajectory with all previous trajectories for this index
+#         for prev_sigma_idx in range(sigma_idx):
+#             prev_r_new_and_v_new = trajectories[idx, 0, prev_sigma_idx, :, :]
+#             prev_r_new = prev_r_new_and_v_new[:, :3]
+#             prev_v_new = prev_r_new_and_v_new[:, 3:]
 
-            # Compare the current position and velocity matrices with the previous ones
-            if np.allclose(r_new, prev_r_new, atol=1e-2) and np.allclose(v_new, prev_v_new, atol=1e-2):
-                print(f"Trajectory {idx}, Sigma Point {sigma_idx} is the same as Sigma Point {prev_sigma_idx}")
-                break
+#             # Compare the current position and velocity matrices with the previous ones
+#             if np.allclose(r_new, prev_r_new, atol=1e-2) and np.allclose(v_new, prev_v_new, atol=1e-2):
+#                 print(f"Trajectory {idx}, Sigma Point {sigma_idx} is the same as Sigma Point {prev_sigma_idx}")
+#                 break
 
-        # Plot the position trajectory in the current subplot (3D space)
-        if sigma_idx == 0:
-            # Thicker line and label for sigma point 0 (Initial State)
-            ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], label="Initial State", color='b', linewidth=2)
-        else:
-            # Thinner line and lower transparency for all other sigma points
-            ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], color='b', alpha=0.3, linewidth=1, label=f"Sigma Point {sigma_idx}")
+#         # Plot the position trajectory in the current subplot (3D space)
+#         if sigma_idx == 0:
+#             # Thicker line and label for sigma point 0 (Initial State)
+#             ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], label="Initial State", color='b', linewidth=2)
+#         else:
+#             # Thinner line and lower transparency for all other sigma points
+#             ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], color='b', alpha=0.3, linewidth=1, label=f"Sigma Point {sigma_idx}")
 
-        # Add markers for the start and end points of the trajectory (using X markers)
-        start_pos = r_new[0, :]  # Start position
-        end_pos = r_new[-1, :]   # End position
-        ax.scatter(start_pos[0], start_pos[1], start_pos[2], color='g', marker='x', s=100, label='Start Point' if sigma_idx == 0 else "")
-        ax.scatter(end_pos[0], end_pos[1], end_pos[2], color='r', marker='x', s=100, label='End Point' if sigma_idx == 0 else "")
+#         # Add markers for the start and end points of the trajectory (using X markers)
+#         start_pos = r_new[0, :]  # Start position
+#         end_pos = r_new[-1, :]   # End position
+#         ax.scatter(start_pos[0], start_pos[1], start_pos[2], color='g', marker='x', s=100, label='Start Point' if sigma_idx == 0 else "")
+#         ax.scatter(end_pos[0], end_pos[1], end_pos[2], color='r', marker='x', s=100, label='End Point' if sigma_idx == 0 else "")
 
-    # Legend
-    ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
-    ax.grid()
+#     # Legend
+#     ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
+#     ax.grid()
 
-# Adjust layout for better spacing between subplots
-plt.tight_layout()
-plt.show()
+# # Adjust layout for better spacing between subplots
+# plt.tight_layout()
+# plt.show()
 
-# Choose a random bundle (trajectory set) from the available ones (assuming 4 bundles here)
-random_bundle_idx = random.randint(0, 3)  # Choose a random index between 0 and 3
+# # Choose a random bundle (trajectory set) from the available ones (assuming 4 bundles here)
+# random_bundle_idx = random.randint(0, 3)  # Choose a random index between 0 and 3
 
-# Choose a random bundle (trajectory set) from the available ones (assuming 4 bundles here)
-random_bundle_idx = random.randint(0, 3)  # Choose a random index between 0 and 3
+# # Choose a random bundle (trajectory set) from the available ones (assuming 4 bundles here)
+# random_bundle_idx = random.randint(0, 3)  # Choose a random index between 0 and 3
 
-# Extract the selected random trajectory for the chosen bundle
-# Assume that for each bundle, there are multiple time steps and sigma points
-random_trajectory = trajectories[random_bundle_idx]  # Shape: (time_steps, sigma_points, trajectory_length, 6)
+# # Extract the selected random trajectory for the chosen bundle
+# # Assume that for each bundle, there are multiple time steps and sigma points
+# random_trajectory = trajectories[random_bundle_idx]  # Shape: (time_steps, sigma_points, trajectory_length, 6)
 
-# Loop through each time step and sigma point to print the start and end positions and velocities
-random_time_steps = np.random.randint(0,(random_trajectory.shape[0]-1),size=5)
-num_sigma_points = random_trajectory.shape[1]
+# # Loop through each time step and sigma point to print the start and end positions and velocities
+# random_time_steps = np.random.randint(0,(random_trajectory.shape[0]-1),size=5)
+# num_sigma_points = random_trajectory.shape[1]
 
-# Loop through each time step and sigma point to print the start and end positions and velocities
-for t_idx in random_time_steps:
-    print(f"Time Step {t_idx}:")
-    for sigma_idx in range(num_sigma_points):
-        # Extract position and velocity for the current sigma point
-        r_new = random_trajectory[t_idx, sigma_idx, :, :3]  # Position (X, Y, Z)
-        v_new = random_trajectory[t_idx, sigma_idx, :, 3:]  # Velocity (Vx, Vy, Vz)
+# # Loop through each time step and sigma point to print the start and end positions and velocities
+# for t_idx in random_time_steps:
+#     print(f"Time Step {t_idx}:")
+#     for sigma_idx in range(num_sigma_points):
+#         # Extract position and velocity for the current sigma point
+#         r_new = random_trajectory[t_idx, sigma_idx, :, :3]  # Position (X, Y, Z)
+#         v_new = random_trajectory[t_idx, sigma_idx, :, 3:]  # Velocity (Vx, Vy, Vz)
         
-        # Start and end positions and velocities
-        start_pos = r_new[0, :]  # Start position
-        end_pos = r_new[-1, :]   # End position
-        start_vel = v_new[0, :]  # Start velocity
-        end_vel = v_new[-1, :]   # End velocity
+#         # Start and end positions and velocities
+#         start_pos = r_new[0, :]  # Start position
+#         end_pos = r_new[-1, :]   # End position
+#         start_vel = v_new[0, :]  # Start velocity
+#         end_vel = v_new[-1, :]   # End velocity
 
-        # Print the info for the current sigma point at the current time step
-        print(f"  Sigma Point {sigma_idx}:")
-        print(f"    Start Position: {start_pos}")
-        print(f"    End Position: {end_pos}")
-        print(f"    Start Velocity: {start_vel}")
-        print(f"    End Velocity: {end_vel}")
+#         # Print the info for the current sigma point at the current time step
+#         print(f"  Sigma Point {sigma_idx}:")
+#         print(f"    Start Position: {start_pos}")
+#         print(f"    End Position: {end_pos}")
+#         print(f"    Start Velocity: {start_vel}")
+#         print(f"    End Velocity: {end_vel}")
 
-# Create a subplot for each time step (3D subplots for each time step)
-fig, axes = plt.subplots(1, random_time_steps.shape[0], figsize=(15, 5), subplot_kw={'projection': '3d'})
+# # Create a subplot for each time step (3D subplots for each time step)
+# fig, axes = plt.subplots(1, random_time_steps.shape[0], figsize=(15, 5), subplot_kw={'projection': '3d'})
 
-# If there's only one time step, axes will not be a list, so we make it iterable
-if num_time_steps == 1:
-    axes = [axes]
+# # If there's only one time step, axes will not be a list, so we make it iterable
+# if num_time_steps == 1:
+#     axes = [axes]
 
-# Loop through each time step and plot
-for t_idx, ax in enumerate(axes):
-    ax.set_title(f"Time Step {t_idx}")
-    ax.set_xlabel('X Position')
-    ax.set_ylabel('Y Position')
-    ax.set_zlabel('Z Position')
+# # Loop through each time step and plot
+# for t_idx, ax in enumerate(axes):
+#     ax.set_title(f"Time Step {t_idx}")
+#     ax.set_xlabel('X Position')
+#     ax.set_ylabel('Y Position')
+#     ax.set_zlabel('Z Position')
 
-    # Plot the original trajectory (sigma point 0 for that time step)
-    original_trajectory = random_trajectory[t_idx, 0, :, :]  # First sigma point is the original trajectory
-    r_new = original_trajectory[:, :3]  # Position (X, Y, Z)
-    v_new = original_trajectory[:, 3:]  # Velocity (Vx, Vy, Vz)
-    ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], 
-            label="Original Trajectory", color='b', linewidth=2)
+#     # Plot the original trajectory (sigma point 0 for that time step)
+#     original_trajectory = random_trajectory[t_idx, 0, :, :]  # First sigma point is the original trajectory
+#     r_new = original_trajectory[:, :3]  # Position (X, Y, Z)
+#     v_new = original_trajectory[:, 3:]  # Velocity (Vx, Vy, Vz)
+#     ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], 
+#             label="Original Trajectory", color='b', linewidth=2)
 
-    # Add markers for the start and end points of the original trajectory (using X markers)
-    start_pos = r_new[0, :]  # Start position
-    end_pos = r_new[-1, :]   # End position
-    ax.scatter(start_pos[0], start_pos[1], start_pos[2], color='g', marker='x', s=100, label='Start Point')
-    ax.scatter(end_pos[0], end_pos[1], end_pos[2], color='r', marker='x', s=100, label='End Point')
+#     # Add markers for the start and end points of the original trajectory (using X markers)
+#     start_pos = r_new[0, :]  # Start position
+#     end_pos = r_new[-1, :]   # End position
+#     ax.scatter(start_pos[0], start_pos[1], start_pos[2], color='g', marker='x', s=100, label='Start Point')
+#     ax.scatter(end_pos[0], end_pos[1], end_pos[2], color='r', marker='x', s=100, label='End Point')
 
-    # Loop through each sigma point (perturbed trajectories) and plot
-    for sigma_idx in range(1, num_sigma_points):  # Start from 1 to skip the original
-        perturbed_trajectory = random_trajectory[t_idx, sigma_idx, :, :]
-        r_perturbed = perturbed_trajectory[:, :3]  # Position (X, Y, Z)
-        ax.plot(r_perturbed[:, 0], r_perturbed[:, 1], r_perturbed[:, 2], 
-                label=f"Sigma Point {sigma_idx}", color='r', alpha=0.4)
+#     # Loop through each sigma point (perturbed trajectories) and plot
+#     for sigma_idx in range(1, num_sigma_points):  # Start from 1 to skip the original
+#         perturbed_trajectory = random_trajectory[t_idx, sigma_idx, :, :]
+#         r_perturbed = perturbed_trajectory[:, :3]  # Position (X, Y, Z)
+#         ax.plot(r_perturbed[:, 0], r_perturbed[:, 1], r_perturbed[:, 2], 
+#                 label=f"Sigma Point {sigma_idx}", color='r', alpha=0.4)
 
-        # Add markers for the start and end points of the perturbed trajectory (using X markers)
-        start_pos_perturbed = r_perturbed[0, :]  # Start position for perturbed trajectory
-        end_pos_perturbed = r_perturbed[-1, :]   # End position for perturbed trajectory
-        ax.scatter(start_pos_perturbed[0], start_pos_perturbed[1], start_pos_perturbed[2], 
-                   color='g', marker='x', s=100, alpha=0.5)
-        ax.scatter(end_pos_perturbed[0], end_pos_perturbed[1], end_pos_perturbed[2], 
-                   color='r', marker='x', s=100, alpha=0.5)
+#         # Add markers for the start and end points of the perturbed trajectory (using X markers)
+#         start_pos_perturbed = r_perturbed[0, :]  # Start position for perturbed trajectory
+#         end_pos_perturbed = r_perturbed[-1, :]   # End position for perturbed trajectory
+#         ax.scatter(start_pos_perturbed[0], start_pos_perturbed[1], start_pos_perturbed[2], 
+#                    color='g', marker='x', s=100, alpha=0.5)
+#         ax.scatter(end_pos_perturbed[0], end_pos_perturbed[1], end_pos_perturbed[2], 
+#                    color='r', marker='x', s=100, alpha=0.5)
 
-    # Add grid and legend
-    ax.grid(True)
+#     # Add grid and legend
+#     ax.grid(True)
 
-# Adjust layout and add legend outside the plot for clarity
-plt.tight_layout()
-plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
-plt.show()
+# # Adjust layout and add legend outside the plot for clarity
+# plt.tight_layout()
+# plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
+# plt.show()
 
 # Define the number of Monte Carlo samples
-num_samples = 1000  
+num_samples = int(1000/num_time_steps)  
 
 # Call the Monte Carlo sampling function
 mc_trajectories, mc_means_history, mc_covariances_history = mc_samples.monte_carlo_sub_trajectories(
@@ -488,6 +488,9 @@ mc_trajectories, mc_means_history, mc_covariances_history = mc_samples.monte_car
     g0=g0
 )
 
+# Save the data
+joblib.dump({'mc_trajectories': mc_trajectories, 'mc_covariances_history': mc_covariances_history, 'mc_means_history': mc_means_history}, 'mc_data.pkl')
+
 # Print shapes to verify outputs
 print("Monte Carlo Trajectories Shape:", mc_trajectories.shape)  # (num_bundles, num_samples, num_time_steps, 1000, 6)
 print("Monte Carlo Means History Shape:", mc_means_history.shape)  # (num_bundles, num_time_steps, 1000, 6)
@@ -497,10 +500,10 @@ print("Monte Carlo Covariances History Shape:", mc_covariances_history.shape)  #
 bundle_index = 0
 
 # Select the time steps to print (e.g., first 5 time steps)
-time_indices = range(5)
+time_indices = range(num_time_steps-1)
 
 # Select the integration point index to inspect (e.g., first integration point)
-integration_point_idx = 50  
+integration_point_idx = 0
 
 # Extract the covariance history for the selected bundle and integration point
 P_mc_bundle = mc_covariances_history[bundle_index, time_indices, integration_point_idx, :, :]

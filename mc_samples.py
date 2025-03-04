@@ -18,23 +18,25 @@ def monte_carlo_sub_trajectories(num_samples, backTspan, time_steps, num_time_st
         time_index = np.argmin(np.abs(backTspan - time[0]))  # Use first time step index
         new_lam = new_lam_bundles[time_index, :, i]
 
-        # Extract the original mean from sigma point 0 at the first integration point
-        original_mean = sigmas_combined[i, 0, :, 0]  # Shape: (6,)
+        for j in range(num_time_steps - 1):
+            # Reset covariance to P_combined at the start of every time step
+            current_covariance = P_combined.copy()
 
-        # Sample from original covariance at the first integration point
-        initial_samples = np.random.multivariate_normal(original_mean, P_combined, num_samples)  # Shape: (num_samples, 6)
+            # Extract the original mean from sigma point 0 at the first integration point
+            original_mean = sigmas_combined[i, 0, :, 0]  # Shape: (6,)
 
-        for k in range(num_samples):
-            sampled_state = initial_samples[k]  # Shape: (6,)
-            r0, v0 = sampled_state[:3], sampled_state[3:]
-            initial_state = rv2mee.rv2mee(np.array([r0]), np.array([v0]), mu)
-            initial_state = np.append(initial_state, np.array([1]))  # Append a perturbation indicator
-            S = np.append(initial_state, new_lam)  # Append control parameters
+            # Sample from original covariance at the first integration point
+            initial_samples = np.random.multivariate_normal(original_mean, current_covariance, num_samples)  # Shape: (num_samples, 6)
 
-            func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
-            
-            # Propagate trajectory through all time steps
-            for j in range(num_time_steps - 1):
+            for k in range(num_samples):
+                sampled_state = initial_samples[k]  # Shape: (6,)
+                r0, v0 = sampled_state[:3], sampled_state[3:]
+                initial_state = rv2mee.rv2mee(np.array([r0]), np.array([v0]), mu)
+                initial_state = np.append(initial_state, np.array([1]))  # Append a perturbation indicator
+                S = np.append(initial_state, new_lam)  # Append control parameters
+
+                func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
+                
                 tstart, tend = time[j], time[j + 1]
                 tspan = np.linspace(tstart, tend, 1000)
 
