@@ -54,27 +54,27 @@ x_r_bundle = r_bundles[:,0, 1]
 y_r_bundle = r_bundles[:,1, 1]
 z_r_bundle = r_bundles[:, 2,1]
 
-# Create a 3D plot to visualize the nominal and perturbed position trajectories for all bundles
-fig = plt.figure(figsize=(12, 12))
-ax = fig.add_axes([0, 0, 1, 1], projection='3d')
+# # Create a 3D plot to visualize the nominal and perturbed position trajectories for all bundles
+# fig = plt.figure(figsize=(12, 12))
+# ax = fig.add_axes([0, 0, 1, 1], projection='3d')
 
-# Plot the nominal trajectory with a larger line width
-ax.plot(x_r, y_r, z_r, label='Nominal Position Trajectory', color='r', linewidth=3)
+# # Plot the nominal trajectory with a larger line width
+# ax.plot(x_r, y_r, z_r, label='Nominal Position Trajectory', color='r', linewidth=3)
 
-# Loop through all bundles and plot their respective trajectories with more transparency
-for i in range(num_bundles):
-    x_r_bundle = r_bundles[:, 0, i]
-    y_r_bundle = r_bundles[:, 1, i]
-    z_r_bundle = r_bundles[:, 2, i]
-    ax.plot(x_r_bundle, y_r_bundle, z_r_bundle, color='b', alpha=0.2)  # Change alpha for more transparency
+# # Loop through all bundles and plot their respective trajectories with more transparency
+# for i in range(num_bundles):
+#     x_r_bundle = r_bundles[:, 0, i]
+#     y_r_bundle = r_bundles[:, 1, i]
+#     z_r_bundle = r_bundles[:, 2, i]
+#     ax.plot(x_r_bundle, y_r_bundle, z_r_bundle, color='b', alpha=0.2)  # Change alpha for more transparency
 
-ax.set_xlabel('X Position')
-ax.set_ylabel('Y Position')
-ax.set_zlabel('Z Position')
-ax.set_title(f'3D Position Trajectory Plot for {num_bundles} Bundles')
-plt.axis('equal')
-ax.legend()
-plt.show()
+# ax.set_xlabel('X Position')
+# ax.set_ylabel('Y Position')
+# ax.set_zlabel('Z Position')
+# ax.set_title(f'3D Position Trajectory Plot for {num_bundles} Bundles')
+# plt.axis('equal')
+# ax.legend()
+# plt.show()
 
 
 # Define the initial covariance matrix for position and velocity (combined state)
@@ -86,153 +86,153 @@ P_vel =  [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]
 # Run external function to generate sigma points
 sigmas_combined, P_combined, time_steps, num_time_steps_, W_m, W_c = generate_sigma_points.generate_sigma_points(nsd=nsd, alpha=1.7215, beta=2., kappa=float(3-nsd), P_pos = P_pos, P_vel = P_vel, num_time_steps=1000, backTspan=backTspan, r_bundles=r_bundles, v_bundles=v_bundles)
 
-# Print the matrix
-print("Covariance Matrix (P_combined):")
-for row in P_combined:
-    print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places for more precisi
+# # Print the matrix
+# print("Covariance Matrix (P_combined):")
+# for row in P_combined:
+#     print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places for more precisi
 
-# Example: Print the sigma points for the first bundle (i = 0) at the first time step (j = 0)
-bundle_idx = 0
-time_step_idx = 0
+# # Example: Print the sigma points for the first bundle (i = 0) at the first time step (j = 0)
+# bundle_idx = 0
+# time_step_idx = 0
 
-print(f"Sigma points for Bundle {bundle_idx+1}, Time Step {time_step_idx+1}:")
-# Format the sigma points output nicely
-for row in sigmas_combined[bundle_idx, :, :, time_step_idx].reshape((2 * nsd + 1, -1)):
-    print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places
-# Output the shape of the generated sigma points for the combined state
-print("Sigma Points for Combined State (Position + Velocity):", sigmas_combined.shape)
+# print(f"Sigma points for Bundle {bundle_idx+1}, Time Step {time_step_idx+1}:")
+# # Format the sigma points output nicely
+# for row in sigmas_combined[bundle_idx, :, :, time_step_idx].reshape((2 * nsd + 1, -1)):
+#     print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places
+# # Output the shape of the generated sigma points for the combined state
+# print("Sigma Points for Combined State (Position + Velocity):", sigmas_combined.shape)
 
-# Convert the sigma points for the first bundle and first time step into a pandas DataFrame for position and velocity
-df_combined = pd.DataFrame(sigmas_combined[0, :, :, 0].reshape(13, 6))  # 13 sigma points, 6 dimensions (3 position + 3 velocity)
+# # Convert the sigma points for the first bundle and first time step into a pandas DataFrame for position and velocity
+# df_combined = pd.DataFrame(sigmas_combined[0, :, :, 0].reshape(13, 6))  # 13 sigma points, 6 dimensions (3 position + 3 velocity)
 
-# Plotting sigma points for the combined state (position + velocity)
-fig = plt.figure(figsize=(12, 8))
+# # Plotting sigma points for the combined state (position + velocity)
+# fig = plt.figure(figsize=(12, 8))
 
-# Plot position part
-ax1 = fig.add_subplot(121, projection='3d')
-sigma_points_position = df_combined.iloc[:, :3].values
-nominal_position = sigma_points_position[0]
-ax1.scatter(sigma_points_position[:, 0], sigma_points_position[:, 1], sigma_points_position[:, 2], color='b', label='Position Sigma Points')
-ax1.scatter(nominal_position[0], nominal_position[1], nominal_position[2], color='r', label='Nominal Position', s=100)
+# # Plot position part
+# ax1 = fig.add_subplot(121, projection='3d')
+# sigma_points_position = df_combined.iloc[:, :3].values
+# nominal_position = sigma_points_position[0]
+# ax1.scatter(sigma_points_position[:, 0], sigma_points_position[:, 1], sigma_points_position[:, 2], color='b', label='Position Sigma Points')
+# ax1.scatter(nominal_position[0], nominal_position[1], nominal_position[2], color='r', label='Nominal Position', s=100)
 
-# Plot 3-sigma ellipsoid around the nominal position
-covariance_position = P_combined[:3, :3]  # Extract the position part of the covariance matrix
-eigenvalues_position, eigenvectors_position = np.linalg.eigh(covariance_position)  # Eigen decomposition
-radii_position = 3 * np.sqrt(eigenvalues_position)  # 3-sigma scaling
+# # Plot 3-sigma ellipsoid around the nominal position
+# covariance_position = P_combined[:3, :3]  # Extract the position part of the covariance matrix
+# eigenvalues_position, eigenvectors_position = np.linalg.eigh(covariance_position)  # Eigen decomposition
+# radii_position = 3 * np.sqrt(eigenvalues_position)  # 3-sigma scaling
 
-# Create a grid of points in 3D spherical coordinates
-phi, theta = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
-x = radii_position[0] * np.sin(theta) * np.cos(phi)
-y = radii_position[1] * np.sin(theta) * np.sin(phi)
-z = radii_position[2] * np.cos(theta)
+# # Create a grid of points in 3D spherical coordinates
+# phi, theta = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
+# x = radii_position[0] * np.sin(theta) * np.cos(phi)
+# y = radii_position[1] * np.sin(theta) * np.sin(phi)
+# z = radii_position[2] * np.cos(theta)
 
-# Reshape and transform into 3D space
-points_position = np.vstack([x.ravel(), y.ravel(), z.ravel()])
-ellipsoid_position = eigenvectors_position @ points_position + nominal_position[:, np.newaxis]
+# # Reshape and transform into 3D space
+# points_position = np.vstack([x.ravel(), y.ravel(), z.ravel()])
+# ellipsoid_position = eigenvectors_position @ points_position + nominal_position[:, np.newaxis]
 
-# Plot the ellipsoid
-ax1.plot_wireframe(ellipsoid_position[0, :].reshape(x.shape), 
-                   ellipsoid_position[1, :].reshape(y.shape),
-                   ellipsoid_position[2, :].reshape(z.shape), color='g', alpha=0.3)
+# # Plot the ellipsoid
+# ax1.plot_wireframe(ellipsoid_position[0, :].reshape(x.shape), 
+#                    ellipsoid_position[1, :].reshape(y.shape),
+#                    ellipsoid_position[2, :].reshape(z.shape), color='g', alpha=0.3)
 
-ax1.set_xlabel('X Position')
-ax1.set_ylabel('Y Position')
-ax1.set_zlabel('Z Position')
-ax1.set_title('Position Sigma Points in 3D Space with 3-Sigma Ellipsoid')
-ax1.legend()
+# ax1.set_xlabel('X Position')
+# ax1.set_ylabel('Y Position')
+# ax1.set_zlabel('Z Position')
+# ax1.set_title('Position Sigma Points in 3D Space with 3-Sigma Ellipsoid')
+# ax1.legend()
 
-# Plot velocity part
-ax2 = fig.add_subplot(122, projection='3d')
-sigma_points_velocity = df_combined.iloc[:, 3:].values
-nominal_velocity = sigma_points_velocity[0]
-ax2.scatter(sigma_points_velocity[:, 0], sigma_points_velocity[:, 1], sigma_points_velocity[:, 2], color='b', label='Velocity Sigma Points')
-ax2.scatter(nominal_velocity[0], nominal_velocity[1], nominal_velocity[2], color='r', label='Nominal Velocity', s=100)
+# # Plot velocity part
+# ax2 = fig.add_subplot(122, projection='3d')
+# sigma_points_velocity = df_combined.iloc[:, 3:].values
+# nominal_velocity = sigma_points_velocity[0]
+# ax2.scatter(sigma_points_velocity[:, 0], sigma_points_velocity[:, 1], sigma_points_velocity[:, 2], color='b', label='Velocity Sigma Points')
+# ax2.scatter(nominal_velocity[0], nominal_velocity[1], nominal_velocity[2], color='r', label='Nominal Velocity', s=100)
 
-# Plot 3-sigma ellipsoid around the nominal velocity
-covariance_velocity = P_combined[3:, 3:]  # Extract the velocity part of the covariance matrix
-eigenvalues_velocity, eigenvectors_velocity = np.linalg.eigh(covariance_velocity)  # Eigen decomposition
-radii_velocity = 3 * np.sqrt(eigenvalues_velocity)  # 3-sigma scaling
+# # Plot 3-sigma ellipsoid around the nominal velocity
+# covariance_velocity = P_combined[3:, 3:]  # Extract the velocity part of the covariance matrix
+# eigenvalues_velocity, eigenvectors_velocity = np.linalg.eigh(covariance_velocity)  # Eigen decomposition
+# radii_velocity = 3 * np.sqrt(eigenvalues_velocity)  # 3-sigma scaling
 
-# Create a grid of points in 3D spherical coordinates
-x_vel = radii_velocity[0] * np.sin(theta) * np.cos(phi)
-y_vel = radii_velocity[1] * np.sin(theta) * np.sin(phi)
-z_vel = radii_velocity[2] * np.cos(theta)
+# # Create a grid of points in 3D spherical coordinates
+# x_vel = radii_velocity[0] * np.sin(theta) * np.cos(phi)
+# y_vel = radii_velocity[1] * np.sin(theta) * np.sin(phi)
+# z_vel = radii_velocity[2] * np.cos(theta)
 
-# Reshape and transform into 3D space
-points_velocity = np.vstack([x_vel.ravel(), y_vel.ravel(), z_vel.ravel()])
-ellipsoid_velocity = eigenvectors_velocity @ points_velocity + nominal_velocity[:, np.newaxis]
+# # Reshape and transform into 3D space
+# points_velocity = np.vstack([x_vel.ravel(), y_vel.ravel(), z_vel.ravel()])
+# ellipsoid_velocity = eigenvectors_velocity @ points_velocity + nominal_velocity[:, np.newaxis]
 
-# Plot the ellipsoid
-ax2.plot_wireframe(ellipsoid_velocity[0, :].reshape(x_vel.shape), 
-                   ellipsoid_velocity[1, :].reshape(y_vel.shape),
-                   ellipsoid_velocity[2, :].reshape(z_vel.shape), color='g', alpha=0.3)
+# # Plot the ellipsoid
+# ax2.plot_wireframe(ellipsoid_velocity[0, :].reshape(x_vel.shape), 
+#                    ellipsoid_velocity[1, :].reshape(y_vel.shape),
+#                    ellipsoid_velocity[2, :].reshape(z_vel.shape), color='g', alpha=0.3)
 
-ax2.set_xlabel('X Velocity')
-ax2.set_ylabel('Y Velocity')
-ax2.set_zlabel('Z Velocity')
-ax2.set_title('Velocity Sigma Points in 3D Space with 3-Sigma Ellipsoid')
-ax2.legend()
+# ax2.set_xlabel('X Velocity')
+# ax2.set_ylabel('Y Velocity')
+# ax2.set_zlabel('Z Velocity')
+# ax2.set_title('Velocity Sigma Points in 3D Space with 3-Sigma Ellipsoid')
+# ax2.legend()
 
-plt.tight_layout()
-plt.show()
+# plt.tight_layout()
+# plt.show()
 
-# --- Calculate Mahalanobis Distances ---
-# Get the position part of the covariance matrix and nominal point
-covariance_position = P_combined[:3, :3]  # Position part of covariance
-nominal_position = sigmas_combined[0, 0, :, 0][:3]  # First sigma point, nominal position
+# # --- Calculate Mahalanobis Distances ---
+# # Get the position part of the covariance matrix and nominal point
+# covariance_position = P_combined[:3, :3]  # Position part of covariance
+# nominal_position = sigmas_combined[0, 0, :, 0][:3]  # First sigma point, nominal position
 
-# Get the perturbed sigma points for position (all sigma points except the center one)
-position_sigma_points = sigmas_combined[0, 1:, :, 0][:, :3]  # Remove the nominal point from the set
+# # Get the perturbed sigma points for position (all sigma points except the center one)
+# position_sigma_points = sigmas_combined[0, 1:, :, 0][:, :3]  # Remove the nominal point from the set
 
-# Inverse of the covariance matrix
-covariance_inv_position = np.linalg.inv(covariance_position)
+# # Inverse of the covariance matrix
+# covariance_inv_position = np.linalg.inv(covariance_position)
 
-# Calculate Mahalanobis distances for position sigma points
-mahalanobis_distances_position = []
-for point in position_sigma_points:
-    diff = point - nominal_position
-    dist = np.sqrt(diff.T @ covariance_inv_position @ diff)  # Mahalanobis distance
-    mahalanobis_distances_position.append(dist)
+# # Calculate Mahalanobis distances for position sigma points
+# mahalanobis_distances_position = []
+# for point in position_sigma_points:
+#     diff = point - nominal_position
+#     dist = np.sqrt(diff.T @ covariance_inv_position @ diff)  # Mahalanobis distance
+#     mahalanobis_distances_position.append(dist)
 
-# Get the velocity part of the covariance matrix and nominal point
-covariance_velocity = P_combined[3:, 3:]  # Velocity part of covariance
-nominal_velocity = sigmas_combined[0, 0, :, 0][3:]  # First sigma point, nominal velocity
+# # Get the velocity part of the covariance matrix and nominal point
+# covariance_velocity = P_combined[3:, 3:]  # Velocity part of covariance
+# nominal_velocity = sigmas_combined[0, 0, :, 0][3:]  # First sigma point, nominal velocity
 
-# Get the perturbed sigma points for velocity
-velocity_sigma_points = sigmas_combined[0, 1:, :, 0][:, 3:]  # Remove the nominal point for velocity
+# # Get the perturbed sigma points for velocity
+# velocity_sigma_points = sigmas_combined[0, 1:, :, 0][:, 3:]  # Remove the nominal point for velocity
 
-# Inverse of the covariance matrix for velocity
-covariance_inv_velocity = np.linalg.inv(covariance_velocity)
+# # Inverse of the covariance matrix for velocity
+# covariance_inv_velocity = np.linalg.inv(covariance_velocity)
 
-# Calculate Mahalanobis distances for velocity sigma points
-mahalanobis_distances_velocity = []
-for point in velocity_sigma_points:
-    diff = point - nominal_velocity
-    dist = np.sqrt(diff.T @ covariance_inv_velocity @ diff)  # Mahalanobis distance
-    mahalanobis_distances_velocity.append(dist)
+# # Calculate Mahalanobis distances for velocity sigma points
+# mahalanobis_distances_velocity = []
+# for point in velocity_sigma_points:
+#     diff = point - nominal_velocity
+#     dist = np.sqrt(diff.T @ covariance_inv_velocity @ diff)  # Mahalanobis distance
+#     mahalanobis_distances_velocity.append(dist)
 
-# --- Plotting ---
-# Plot the Mahalanobis distances for position sigma points
-plt.figure(figsize=(12, 6))
-plt.subplot(121)
-plt.plot(mahalanobis_distances_position, 'bo-', label='Mahalanobis Distance (Position)')
-plt.title('Mahalanobis Distances for Position Sigma Points')
-plt.xlabel('Sigma Point Index')
-plt.ylabel('Mahalanobis Distance')
-plt.grid(True)
-plt.legend()
+# # --- Plotting ---
+# # Plot the Mahalanobis distances for position sigma points
+# plt.figure(figsize=(12, 6))
+# plt.subplot(121)
+# plt.plot(mahalanobis_distances_position, 'bo-', label='Mahalanobis Distance (Position)')
+# plt.title('Mahalanobis Distances for Position Sigma Points')
+# plt.xlabel('Sigma Point Index')
+# plt.ylabel('Mahalanobis Distance')
+# plt.grid(True)
+# plt.legend()
 
-# Plot the Mahalanobis distances for velocity sigma points
-plt.subplot(122)
-plt.plot(mahalanobis_distances_velocity, 'ro-', label='Mahalanobis Distance (Velocity)')
-plt.title('Mahalanobis Distances for Velocity Sigma Points')
-plt.xlabel('Sigma Point Index')
-plt.ylabel('Mahalanobis Distance')
-plt.grid(True)
-plt.legend()
+# # Plot the Mahalanobis distances for velocity sigma points
+# plt.subplot(122)
+# plt.plot(mahalanobis_distances_velocity, 'ro-', label='Mahalanobis Distance (Velocity)')
+# plt.title('Mahalanobis Distances for Velocity Sigma Points')
+# plt.xlabel('Sigma Point Index')
+# plt.ylabel('Mahalanobis Distance')
+# plt.grid(True)
+# plt.legend()
 
-plt.tight_layout()
-plt.show()
+# plt.tight_layout()
+# plt.show()
 
 # define dummy value for num_time_steps
 num_time_steps = 2
@@ -257,68 +257,68 @@ trajectories, P_combined_history, means_history = solve_trajectories.solve_traje
 # Save the data
 joblib.dump({'trajectories': trajectories, 'P_combined_history': P_combined_history, 'means_history': means_history}, 'data.pkl')
 
-# Select the bundle index (e.g., bundle 0)
-bundle_index = 0
+# # Select the bundle index (e.g., bundle 0)
+# bundle_index = 0
 
-# Select the time steps you want to plot (this will correspond to the indices of time steps)
-time_indices = range(num_time_steps-1)
+# # Select the time steps you want to plot (this will correspond to the indices of time steps)
+# time_indices = range(num_time_steps-1)
 
-# Select the integration point index to inspect (e.g., first integration point)
-integration_point_idx = 0  
+# # Select the integration point index to inspect (e.g., first integration point)
+# integration_point_idx = 0  
 
-# Extract the covariance history for the selected bundle and integration point
-P_combined_bundle = P_combined_history[bundle_index, time_indices, integration_point_idx, :, :]
+# # Extract the covariance history for the selected bundle and integration point
+# P_combined_bundle = P_combined_history[bundle_index, time_indices, integration_point_idx, :, :]
 
-# Initialize lists to store the diagonal elements (variances) of the covariance matrix over time
-position_variances = []
-velocity_variances = []
+# # Initialize lists to store the diagonal elements (variances) of the covariance matrix over time
+# position_variances = []
+# velocity_variances = []
 
-# Loop over the selected time indices and extract the diagonal elements (variances)
-for i in range(len(time_indices)):
-    P = P_combined_bundle[i]  # Shape: (6, 6)
+# # Loop over the selected time indices and extract the diagonal elements (variances)
+# for i in range(len(time_indices)):
+#     P = P_combined_bundle[i]  # Shape: (6, 6)
 
-    # Print the covariance matrix P for the current time index in a formatted manner
-    print(f"Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}, Integration Point {integration_point_idx+1}:")
-    for row in P:
-        print("  ".join(f"{val:.8f}" for val in row))  # Format each value to 8 decimal places
+#     # Print the covariance matrix P for the current time index in a formatted manner
+#     print(f"Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}, Integration Point {integration_point_idx+1}:")
+#     for row in P:
+#         print("  ".join(f"{val:.8f}" for val in row))  # Format each value to 8 decimal places
    
-    # Extract the diagonal elements of the covariance matrix (position and velocity variances)
-    position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
-    velocity_variances.append([P[3, 3], P[4, 4], P[5, 5]])  # Variance of velocity (vx, vy, vz)
+#     # Extract the diagonal elements of the covariance matrix (position and velocity variances)
+#     position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
+#     velocity_variances.append([P[3, 3], P[4, 4], P[5, 5]])  # Variance of velocity (vx, vy, vz)
 
-# Convert lists to numpy arrays for easier plotting
-position_variances = np.array(position_variances)
-velocity_variances = np.array(velocity_variances)
+# # Convert lists to numpy arrays for easier plotting
+# position_variances = np.array(position_variances)
+# velocity_variances = np.array(velocity_variances)
 
-# Plot the variances over time
-plt.figure(figsize=(10, 6))
+# # Plot the variances over time
+# plt.figure(figsize=(10, 6))
 
-# Plot the position variances (x, y, z)
-plt.subplot(2, 1, 1)
-plt.plot(time_indices, position_variances[:, 0], label="Variance in X Position", color='b')
-plt.plot(time_indices, position_variances[:, 1], label="Variance in Y Position", color='g')
-plt.plot(time_indices, position_variances[:, 2], label="Variance in Z Position", color='r')
-plt.xlabel('Time Step')
-plt.ylabel('Position Variance')
-plt.title(f'Evolution of Position Variance for Bundle {bundle_index}')
-plt.legend()
+# # Plot the position variances (x, y, z)
+# plt.subplot(2, 1, 1)
+# plt.plot(time_indices, position_variances[:, 0], label="Variance in X Position", color='b')
+# plt.plot(time_indices, position_variances[:, 1], label="Variance in Y Position", color='g')
+# plt.plot(time_indices, position_variances[:, 2], label="Variance in Z Position", color='r')
+# plt.xlabel('Time Step')
+# plt.ylabel('Position Variance')
+# plt.title(f'Evolution of Position Variance for Bundle {bundle_index}')
+# plt.legend()
 
-# Plot the velocity variances (vx, vy, vz)
-plt.subplot(2, 1, 2)
-plt.plot(time_indices, velocity_variances[:, 0], label="Variance in X Velocity", color='b')
-plt.plot(time_indices, velocity_variances[:, 1], label="Variance in Y Velocity", color='g')
-plt.plot(time_indices, velocity_variances[:, 2], label="Variance in Z Velocity", color='r')
-plt.xlabel('Time Step')
-plt.ylabel('Velocity Variance')
-plt.title(f'Evolution of Velocity Variance for Bundle {bundle_index}')
-plt.legend()
+# # Plot the velocity variances (vx, vy, vz)
+# plt.subplot(2, 1, 2)
+# plt.plot(time_indices, velocity_variances[:, 0], label="Variance in X Velocity", color='b')
+# plt.plot(time_indices, velocity_variances[:, 1], label="Variance in Y Velocity", color='g')
+# plt.plot(time_indices, velocity_variances[:, 2], label="Variance in Z Velocity", color='r')
+# plt.xlabel('Time Step')
+# plt.ylabel('Velocity Variance')
+# plt.title(f'Evolution of Velocity Variance for Bundle {bundle_index}')
+# plt.legend()
 
-# Show the plots
-plt.tight_layout()
-plt.show()
+# # Show the plots
+# plt.tight_layout()
+# plt.show()
 
-# Print the shape of trajectories
-print("Shape of trajectories:", trajectories.shape)  
+# # Print the shape of trajectories
+# print("Shape of trajectories:", trajectories.shape)  
 
 # # Select a specific bundle and time step to plot
 # bundle_idx = 0  # Select the first bundle (you can change this)
@@ -469,7 +469,7 @@ print("Shape of trajectories:", trajectories.shape)
 # plt.show()
 
 # Define the number of Monte Carlo samples
-num_samples = int(1000/num_time_steps)  
+num_samples = 5000
 
 # Call the Monte Carlo sampling function
 mc_trajectories, mc_means_history, mc_covariances_history = mc_samples.monte_carlo_sub_trajectories(
@@ -491,67 +491,134 @@ mc_trajectories, mc_means_history, mc_covariances_history = mc_samples.monte_car
 # Save the data
 joblib.dump({'mc_trajectories': mc_trajectories, 'mc_covariances_history': mc_covariances_history, 'mc_means_history': mc_means_history}, 'mc_data.pkl')
 
-# Print shapes to verify outputs
-print("Monte Carlo Trajectories Shape:", mc_trajectories.shape)  # (num_bundles, num_samples, num_time_steps, 1000, 6)
-print("Monte Carlo Means History Shape:", mc_means_history.shape)  # (num_bundles, num_time_steps, 1000, 6)
-print("Monte Carlo Covariances History Shape:", mc_covariances_history.shape)  # (num_bundles, num_time_steps, 1000, 6, 6)
+# # Print shapes to verify outputs
+# print("Monte Carlo Trajectories Shape:", mc_trajectories.shape)  # (num_bundles, num_samples, num_time_steps, 1000, 6)
+# print("Monte Carlo Means History Shape:", mc_means_history.shape)  # (num_bundles, num_time_steps, 1000, 6)
+# print("Monte Carlo Covariances History Shape:", mc_covariances_history.shape)  # (num_bundles, num_time_steps, 1000, 6, 6)
 
-# Select the bundle index (e.g., bundle 0)
-bundle_index = 0
+# # Select the bundle index (e.g., bundle 0)
+# bundle_index = 0
 
-# Select the time steps to print (e.g., first 5 time steps)
-time_indices = range(num_time_steps-1)
+# # Select the time steps to print (e.g., first 5 time steps)
+# time_indices = range(num_time_steps-1)
 
-# Select the integration point index to inspect (e.g., first integration point)
-integration_point_idx = 0
+# # Select the integration point index to inspect (e.g., first integration point)
+# integration_point_idx = 0
 
-# Extract the covariance history for the selected bundle and integration point
-P_mc_bundle = mc_covariances_history[bundle_index, time_indices, integration_point_idx, :, :]
+# # Extract the covariance history for the selected bundle and integration point
+# P_mc_bundle = mc_covariances_history[bundle_index, time_indices, integration_point_idx, :, :]
 
-# Initialize lists to store diagonal elements (variances) of the covariance matrix over time
-position_variances = []
-velocity_variances = []
+# # Initialize lists to store diagonal elements (variances) of the covariance matrix over time
+# position_variances = []
+# velocity_variances = []
 
-# Loop over the selected time indices and extract the diagonal elements (variances)
-for i in range(len(time_indices)):
-    P = P_mc_bundle[i]  # Shape: (6,6)
+# # Loop over the selected time indices and extract the diagonal elements (variances)
+# for i in range(len(time_indices)):
+#     P = P_mc_bundle[i]  # Shape: (6,6)
 
-    # Print the covariance matrix P for the current time index in a formatted manner
-    print(f"Monte Carlo Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}, Integration Point {integration_point_idx+1}:")
-    for row in P:
-        print("  ".join(f"{val:.8f}" for val in row))  # Format each value to 8 decimal places
+#     # Print the covariance matrix P for the current time index in a formatted manner
+#     print(f"Monte Carlo Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}, Integration Point {integration_point_idx+1}:")
+#     for row in P:
+#         print("  ".join(f"{val:.8f}" for val in row))  # Format each value to 8 decimal places
    
-    # Extract the diagonal elements of the covariance matrix (position and velocity variances)
-    position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
-    velocity_variances.append([P[3, 3], P[4, 4], P[5, 5]])  # Variance of velocity (vx, vy, vz)
+#     # Extract the diagonal elements of the covariance matrix (position and velocity variances)
+#     position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
+#     velocity_variances.append([P[3, 3], P[4, 4], P[5, 5]])  # Variance of velocity (vx, vy, vz)
 
-# Convert lists to numpy arrays for easier plotting
-position_variances = np.array(position_variances)
-velocity_variances = np.array(velocity_variances)
+# # Convert lists to numpy arrays for easier plotting
+# position_variances = np.array(position_variances)
+# velocity_variances = np.array(velocity_variances)
 
-# Plot the variances over time
-plt.figure(figsize=(10, 6))
+# # Plot the variances over time
+# plt.figure(figsize=(10, 6))
 
-# Plot the position variances (x, y, z)
-plt.subplot(2, 1, 1)
-plt.plot(time_indices, position_variances[:, 0], label="Variance in X Position", color='b')
-plt.plot(time_indices, position_variances[:, 1], label="Variance in Y Position", color='g')
-plt.plot(time_indices, position_variances[:, 2], label="Variance in Z Position", color='r')
-plt.xlabel('Time Step')
-plt.ylabel('Position Variance')
-plt.title(f'Evolution of Monte Carlo Position Variance for Bundle {bundle_index}')
-plt.legend()
+# # Plot the position variances (x, y, z)
+# plt.subplot(2, 1, 1)
+# plt.plot(time_indices, position_variances[:, 0], label="Variance in X Position", color='b')
+# plt.plot(time_indices, position_variances[:, 1], label="Variance in Y Position", color='g')
+# plt.plot(time_indices, position_variances[:, 2], label="Variance in Z Position", color='r')
+# plt.xlabel('Time Step')
+# plt.ylabel('Position Variance')
+# plt.title(f'Evolution of Monte Carlo Position Variance for Bundle {bundle_index}')
+# plt.legend()
 
-# Plot the velocity variances (vx, vy, vz)
-plt.subplot(2, 1, 2)
-plt.plot(time_indices, velocity_variances[:, 0], label="Variance in X Velocity", color='b')
-plt.plot(time_indices, velocity_variances[:, 1], label="Variance in Y Velocity", color='g')
-plt.plot(time_indices, velocity_variances[:, 2], label="Variance in Z Velocity", color='r')
-plt.xlabel('Time Step')
-plt.ylabel('Velocity Variance')
-plt.title(f'Evolution of Monte Carlo Velocity Variance for Bundle {bundle_index}')
-plt.legend()
+# # Plot the velocity variances (vx, vy, vz)
+# plt.subplot(2, 1, 2)
+# plt.plot(time_indices, velocity_variances[:, 0], label="Variance in X Velocity", color='b')
+# plt.plot(time_indices, velocity_variances[:, 1], label="Variance in Y Velocity", color='g')
+# plt.plot(time_indices, velocity_variances[:, 2], label="Variance in Z Velocity", color='r')
+# plt.xlabel('Time Step')
+# plt.ylabel('Velocity Variance')
+# plt.title(f'Evolution of Monte Carlo Velocity Variance for Bundle {bundle_index}')
+# plt.legend()
 
-# Show the plots
-plt.tight_layout()
-plt.show()
+# # Show the plots
+# plt.tight_layout()
+# plt.show()
+
+# # Choose a random bundle (trajectory set) from the available ones
+# random_bundle_idx = random.randint(0, mc_trajectories.shape[0] - 1)  # Random bundle index
+
+# # Extract the selected random trajectory for the chosen bundle
+# random_trajectory = mc_trajectories[random_bundle_idx]  # Shape: (num_samples, num_time_steps, 1000, 6)
+
+# # Randomly select 5 time steps to visualize
+# random_time_steps = np.random.randint(0, random_trajectory.shape[1], size=5)
+# num_samples = random_trajectory.shape[0]
+
+# # Print start and end positions and velocities for each sample at selected time steps
+# for t_idx in random_time_steps:
+#     print(f"Time Step {t_idx}:")
+#     for sample_idx in range(num_samples):
+#         r_new = random_trajectory[sample_idx, t_idx, :, :3]  # Position (X, Y, Z)
+#         v_new = random_trajectory[sample_idx, t_idx, :, 3:]  # Velocity (Vx, Vy, Vz)
+
+#         start_pos = r_new[0, :]
+#         end_pos = r_new[-1, :]
+#         start_vel = v_new[0, :]
+#         end_vel = v_new[-1, :]
+
+#         print(f"  Sample {sample_idx}:")
+#         print(f"    Start Position: {start_pos}")
+#         print(f"    End Position: {end_pos}")
+#         print(f"    Start Velocity: {start_vel}")
+#         print(f"    End Velocity: {end_vel}")
+
+# # Create a subplot for each time step (3D plots)
+# fig, axes = plt.subplots(1, len(random_time_steps), figsize=(15, 5), subplot_kw={'projection': '3d'})
+
+# if len(random_time_steps) == 1:
+#     axes = [axes]  # Ensure axes is iterable if only one time step
+
+# # Plot trajectories for selected time steps
+# for idx, (t_idx, ax) in enumerate(zip(random_time_steps, axes)):
+#     ax.set_title(f"Time Step {t_idx}")
+#     ax.set_xlabel('X Position')
+#     ax.set_ylabel('Y Position')
+#     ax.set_zlabel('Z Position')
+
+#     # Plot the first Monte Carlo sample trajectory as the reference (original)
+#     original_trajectory = random_trajectory[0, t_idx, :, :]  # First sample trajectory
+#     r_new = original_trajectory[:, :3]  # Position (X, Y, Z)
+#     ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], label="Original Sample", color='b', linewidth=2)
+
+#     # Start and end markers
+#     ax.scatter(r_new[0, 0], r_new[0, 1], r_new[0, 2], color='g', marker='x', s=100, label='Start Point')
+#     ax.scatter(r_new[-1, 0], r_new[-1, 1], r_new[-1, 2], color='r', marker='x', s=100, label='End Point')
+
+#     # Loop through other samples and plot perturbed trajectories
+#     for sample_idx in range(1, num_samples):  
+#         perturbed_trajectory = random_trajectory[sample_idx, t_idx, :, :]
+#         r_perturbed = perturbed_trajectory[:, :3]
+#         ax.plot(r_perturbed[:, 0], r_perturbed[:, 1], r_perturbed[:, 2], label=f"Sample {sample_idx}", color='r', alpha=0.4)
+
+#         # Start and end markers
+#         ax.scatter(r_perturbed[0, 0], r_perturbed[0, 1], r_perturbed[0, 2], color='g', marker='x', s=100, alpha=0.5)
+#         ax.scatter(r_perturbed[-1, 0], r_perturbed[-1, 1], r_perturbed[-1, 2], color='r', marker='x', s=100, alpha=0.5)
+
+#     ax.grid(True)
+
+# # Adjust layout and show the plot
+# plt.tight_layout()
+# plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
+# plt.show()
