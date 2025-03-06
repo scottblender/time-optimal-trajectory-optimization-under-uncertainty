@@ -469,7 +469,7 @@ joblib.dump({'trajectories': trajectories, 'P_combined_history': P_combined_hist
 # plt.show()
 
 # Define the number of Monte Carlo samples
-num_samples = 5000
+num_samples = 10000
 
 # Call the Monte Carlo sampling function
 mc_trajectories, mc_means_history, mc_covariances_history = mc_samples.monte_carlo_sub_trajectories(
