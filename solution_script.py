@@ -19,13 +19,16 @@ p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU,TU = compute_nominal_traje
 # Number of bundles to generate
 num_bundles = 100
 
-# Compute bundle trajectory parameters
-r_tr, v_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, backTspan = compute_bundle_trajectory_params.compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, num_bundles)
+# Call function
+r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan = compute_bundle_trajectory_params.compute_bundle_trajectory_params(
+    p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, num_bundles
+)
 
 # Reverse the trajectory to adjust the order of bundles
 r_bundles = r_bundles[::-1, :, :]
 v_bundles = v_bundles[::-1, :, :]
-#new_lam_bundles = new_lam_bundles[::-1,:, :]
+new_lam_bundles = new_lam_bundles[::-1,:, :]
+mass_bundles = mass_bundles[::-1,:]
 # Print out new_lam_bundles nicely
 num_steps, lam_size, num_bundles = new_lam_bundles.shape
 
@@ -78,18 +81,27 @@ z_r_bundle = r_bundles[:, 2,1]
 
 
 # Define the initial covariance matrix for position and velocity (combined state)
-nsd = 6
-P_pos = [np.eye(nsd//2) * 0.01, np.zeros((nsd//2, nsd//2))]
-P_vel =  [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.0001]
+nsd = 7
+P_pos = np.eye(3) * 0.01  # 3x3 Position covariance
+P_vel = np.eye(3) * 0.0001  # 3x3 Velocity covariance
+P_mass = np.array([[0.0001]])  # Mass variance (scalar)
 
+alpha, beta, kappa = 1.7215, 2, float((3-nsd))  # UKF parameters
 
-# Run external function to generate sigma points
-sigmas_combined, P_combined, time_steps, num_time_steps_, W_m, W_c = generate_sigma_points.generate_sigma_points(nsd=nsd, alpha=1.7215, beta=2., kappa=float(3-nsd), P_pos = P_pos, P_vel = P_vel, num_time_steps=1000, backTspan=backTspan, r_bundles=r_bundles, v_bundles=v_bundles)
+num_time_steps = 1000
 
-# # Print the matrix
-# print("Covariance Matrix (P_combined):")
-# for row in P_combined:
-#     print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places for more precisi
+# Call function
+sigmas_combined, P_combined, time_steps, num_time_steps, Wm, Wc = generate_sigma_points.generate_sigma_points(
+    nsd=nsd, alpha=alpha, beta=beta, kappa=kappa,
+    P_pos=P_pos, P_vel=P_vel, P_mass=P_mass,
+    num_time_steps=num_time_steps, backTspan=backTspan,
+    r_bundles=r_bundles, v_bundles=v_bundles, mass_bundles=mass_bundles
+)
+
+# Print the matrix
+print("Covariance Matrix (P_combined):")
+for row in P_combined:
+    print("  ".join(f"{val: .8f}" for val in row))  # 8 decimal places for more precisi
 
 # # Example: Print the sigma points for the first bundle (i = 0) at the first time step (j = 0)
 # bundle_idx = 0
@@ -234,57 +246,63 @@ sigmas_combined, P_combined, time_steps, num_time_steps_, W_m, W_c = generate_si
 # plt.tight_layout()
 # plt.show()
 
-# define dummy value for num_time_steps
-num_time_steps = 2
+# Define time_steps as all indices of backTspan
+time_steps = np.arange(len(backTspan))  # [0, 1, 2, ..., 999]
 
-# Call external function to solve new IVPs
+# Choose specific indices for tstart and tend
+tstart_index = 0  # Start at index 0
+tend_index = 1    # End at index 1
+
+# Extract the corresponding times from backTspan
+tstart = backTspan[tstart_index]
+tend = backTspan[tend_index]
+
+# Extract the correct sub-array from time_steps
+selected_time_steps = time_steps[tstart_index:tend_index + 1]  # Ensure inclusive selection
+num_time_steps = len(selected_time_steps)
+
+# Call the function
 trajectories, P_combined_history, means_history = solve_trajectories.solve_trajectories_with_covariance(
-    backTspan=backTspan, 
-    time_steps=time_steps, 
-    num_time_steps=num_time_steps, # fix later, but 5 time steps computed
-    num_bundles=num_bundles, 
-    sigmas_combined=sigmas_combined, 
-    new_lam_bundles=new_lam_bundles, 
-    mu=mu, 
-    F=F, 
-    c=c, 
-    m0=m0, 
-    g0=g0,
-    Wm= W_m,
-    Wc = W_c
+    backTspan, selected_time_steps, num_time_steps, num_bundles,
+    sigmas_combined, new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc
 )
+
+# Print results (for debugging)
+print("Trajectories Shape:", trajectories.shape)  # Should now be (..., 7)
+print("P_combined_history Shape:", P_combined_history.shape)
+print("Means_history Shape:", means_history.shape)
 
 # Save the data
 joblib.dump({'trajectories': trajectories, 'P_combined_history': P_combined_history, 'means_history': means_history}, 'data.pkl')
 
-# # Select the bundle index (e.g., bundle 0)
-# bundle_index = 0
+# Select the bundle index (e.g., bundle 0)
+bundle_index = 0
 
-# # Select the time steps you want to plot (this will correspond to the indices of time steps)
-# time_indices = range(num_time_steps-1)
+# Select the time steps you want to plot (this will correspond to the indices of time steps)
+time_indices = range(num_time_steps-1)
 
-# # Select the integration point index to inspect (e.g., first integration point)
-# integration_point_idx = 0  
+# Select the integration point index to inspect (e.g., first integration point)
+integration_point_idx = 999  
 
-# # Extract the covariance history for the selected bundle and integration point
-# P_combined_bundle = P_combined_history[bundle_index, time_indices, integration_point_idx, :, :]
+# Extract the covariance history for the selected bundle and integration point
+P_combined_bundle = P_combined_history[bundle_index, time_indices, integration_point_idx, :, :]
 
-# # Initialize lists to store the diagonal elements (variances) of the covariance matrix over time
-# position_variances = []
-# velocity_variances = []
+# Initialize lists to store the diagonal elements (variances) of the covariance matrix over time
+position_variances = []
+velocity_variances = []
 
-# # Loop over the selected time indices and extract the diagonal elements (variances)
-# for i in range(len(time_indices)):
-#     P = P_combined_bundle[i]  # Shape: (6, 6)
+# Loop over the selected time indices and extract the diagonal elements (variances)
+for i in range(len(time_indices)):
+    P = P_combined_bundle[i]  # Shape: (6, 6)
 
-#     # Print the covariance matrix P for the current time index in a formatted manner
-#     print(f"Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}, Integration Point {integration_point_idx+1}:")
-#     for row in P:
-#         print("  ".join(f"{val:.8f}" for val in row))  # Format each value to 8 decimal places
+    # Print the covariance matrix P for the current time index in a formatted manner
+    print(f"Covariance matrix for Bundle {bundle_index+1}, Time Step {time_indices[i]+1}, Integration Point {integration_point_idx+1}:")
+    for row in P:
+        print("  ".join(f"{val:.8f}" for val in row))  # Format each value to 8 decimal places
    
-#     # Extract the diagonal elements of the covariance matrix (position and velocity variances)
-#     position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
-#     velocity_variances.append([P[3, 3], P[4, 4], P[5, 5]])  # Variance of velocity (vx, vy, vz)
+    # Extract the diagonal elements of the covariance matrix (position and velocity variances)
+    position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
+    velocity_variances.append([P[3, 3], P[4, 4], P[5, 5]])  # Variance of velocity (vx, vy, vz)
 
 # # Convert lists to numpy arrays for easier plotting
 # position_variances = np.array(position_variances)
@@ -320,68 +338,65 @@ joblib.dump({'trajectories': trajectories, 'P_combined_history': P_combined_hist
 # # Print the shape of trajectories
 # print("Shape of trajectories:", trajectories.shape)  
 
-# # Select a specific bundle and time step to plot
-# bundle_idx = 0  # Select the first bundle (you can change this)
-# time_step_idx = 4  # Select the 6th time step (you can change this)
+# Select a specific bundle and time step to plot
+bundle_idx = 0  # Select the first bundle (you can change this)
+time_step_idx = 1  # Select the 6th time step (you can change this)
 
-# # Plot the PDF distributions using KDE for the selected bundle and time step
-# pdf_determination.plot_pdf_with_kde(trajectories, bundle_idx, time_step_idx)
+#  Ensure that the random indices do not exceed the bounds
+random_indices = random.sample(range(trajectories.shape[0]), 2)
 
-# #  Ensure that the random indices do not exceed the bounds
-# random_indices = random.sample(range(trajectories.shape[0]), 4)
+# Create a subplot figure (2x2 grid for 4 random original trajectories)
+fig = plt.figure(figsize=(12, 12))
 
-# # Create a subplot figure (2x2 grid for 4 random original trajectories)
-# fig = plt.figure(figsize=(12, 12))
+# Loop through the randomly selected indices
+for idx in random_indices:
+    ax = fig.add_subplot(1, 2, random_indices.index(idx) + 1, projection='3d')
+    ax.set_title(f"Original Trajectory {idx} - Uncertainty Propagation")
+    ax.set_xlabel("X Position")
+    ax.set_ylabel("Y Position")
+    ax.set_zlabel("Z Position")
 
-# # Loop through the randomly selected indices
-# for idx in random_indices:
-#     ax = fig.add_subplot(2, 2, random_indices.index(idx) + 1, projection='3d')
-#     ax.set_title(f"Original Trajectory {idx} - Uncertainty Propagation")
-#     ax.set_xlabel("X Position")
-#     ax.set_ylabel("Y Position")
-#     ax.set_zlabel("Z Position")
+    # Loop through all sigma point trajectories for the selected original trajectory
+    for sigma_idx in range(trajectories.shape[2]):  # Loop through the 13 sigma points
+        # Extract the sub-trajectory for the current sigma point from time step t_k to t_{k+1}
+        r_new_and_v_new = trajectories[idx, 0, sigma_idx, :, :]  # (1000, 6) for the 1st time interval
 
-#     # Loop through all sigma point trajectories for the selected original trajectory
-#     for sigma_idx in range(trajectories.shape[2]):  # Loop through the 13 sigma points
-#         # Extract the sub-trajectory for the current sigma point from time step t_k to t_{k+1}
-#         r_new_and_v_new = trajectories[idx, 0, sigma_idx, :, :]  # (1000, 6) for the 1st time interval
+        # Extract position and velocity separately
+        r_new = r_new_and_v_new[:, :3]  # Position (X, Y, Z)
+        v_new = r_new_and_v_new[:, 3:6]  # Velocity (Vx, Vy, Vz)
 
-#         # Extract position and velocity separately
-#         r_new = r_new_and_v_new[:, :3]  # Position (X, Y, Z)
-#         v_new = r_new_and_v_new[:, 3:]  # Velocity (Vx, Vy, Vz)
+        # Compare the current trajectory with all previous trajectories for this index
+        for prev_sigma_idx in range(sigma_idx):
+            prev_r_new_and_v_new = trajectories[idx, 0, prev_sigma_idx, :, :]
+            prev_r_new = prev_r_new_and_v_new[:, :3]
+            prev_v_new = prev_r_new_and_v_new[:, 3:6]
 
-#         # Compare the current trajectory with all previous trajectories for this index
-#         for prev_sigma_idx in range(sigma_idx):
-#             prev_r_new_and_v_new = trajectories[idx, 0, prev_sigma_idx, :, :]
-#             prev_r_new = prev_r_new_and_v_new[:, :3]
-#             prev_v_new = prev_r_new_and_v_new[:, 3:]
+            # Compare the current position and velocity matrices with the previous ones
+            if np.allclose(r_new, prev_r_new, atol=1e-2) and np.allclose(v_new, prev_v_new, atol=1e-2):
+                print(f"Trajectory {idx}, Sigma Point {sigma_idx} is the same as Sigma Point {prev_sigma_idx}")
+                break
 
-#             # Compare the current position and velocity matrices with the previous ones
-#             if np.allclose(r_new, prev_r_new, atol=1e-2) and np.allclose(v_new, prev_v_new, atol=1e-2):
-#                 print(f"Trajectory {idx}, Sigma Point {sigma_idx} is the same as Sigma Point {prev_sigma_idx}")
-#                 break
+        # Plot the position trajectory in the current subplot (3D space)
+        if sigma_idx == 0:
+            # Thicker line and label for sigma point 0 (Initial State)
+            ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], label="Initial State", color='b', linewidth=2)
+        else:
+            # Thinner line and lower transparency for all other sigma points
+            ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], color='b', alpha=0.3, linewidth=1, label=f"Sigma Point {sigma_idx}")
 
-#         # Plot the position trajectory in the current subplot (3D space)
-#         if sigma_idx == 0:
-#             # Thicker line and label for sigma point 0 (Initial State)
-#             ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], label="Initial State", color='b', linewidth=2)
-#         else:
-#             # Thinner line and lower transparency for all other sigma points
-#             ax.plot(r_new[:, 0], r_new[:, 1], r_new[:, 2], color='b', alpha=0.3, linewidth=1, label=f"Sigma Point {sigma_idx}")
+        # Add markers for the start and end points of the trajectory (using X markers)
+        start_pos = r_new[0, :]  # Start position
+        end_pos = r_new[-1, :]   # End position
+        ax.scatter(start_pos[0], start_pos[1], start_pos[2], color='g', marker='x', s=100, label='Start Point' if sigma_idx == 0 else "")
+        ax.scatter(end_pos[0], end_pos[1], end_pos[2], color='r', marker='x', s=100, label='End Point' if sigma_idx == 0 else "")
 
-#         # Add markers for the start and end points of the trajectory (using X markers)
-#         start_pos = r_new[0, :]  # Start position
-#         end_pos = r_new[-1, :]   # End position
-#         ax.scatter(start_pos[0], start_pos[1], start_pos[2], color='g', marker='x', s=100, label='Start Point' if sigma_idx == 0 else "")
-#         ax.scatter(end_pos[0], end_pos[1], end_pos[2], color='r', marker='x', s=100, label='End Point' if sigma_idx == 0 else "")
+    # Legend
+    ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
+    ax.grid()
 
-#     # Legend
-#     ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
-#     ax.grid()
-
-# # Adjust layout for better spacing between subplots
-# plt.tight_layout()
-# plt.show()
+# Adjust layout for better spacing between subplots
+plt.tight_layout()
+plt.show()
 
 # # Choose a random bundle (trajectory set) from the available ones (assuming 4 bundles here)
 # random_bundle_idx = random.randint(0, 3)  # Choose a random index between 0 and 3
@@ -468,28 +483,28 @@ joblib.dump({'trajectories': trajectories, 'P_combined_history': P_combined_hist
 # plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
 # plt.show()
 
-# Define the number of Monte Carlo samples
-num_samples = 10000
+# # Define the number of Monte Carlo samples
+# num_samples = 10000
 
-# Call the Monte Carlo sampling function
-mc_trajectories, mc_means_history, mc_covariances_history = mc_samples.monte_carlo_sub_trajectories(
-    num_samples=num_samples, 
-    backTspan=backTspan, 
-    time_steps=time_steps, 
-    num_time_steps=num_time_steps, 
-    num_bundles=num_bundles, 
-    sigmas_combined=sigmas_combined,  # From sigma point generation
-    P_combined=P_combined,            # Original covariance matrix
-    new_lam_bundles=new_lam_bundles, 
-    mu=mu, 
-    F=F, 
-    c=c, 
-    m0=m0, 
-    g0=g0
-)
+# # Call the Monte Carlo sampling function
+# mc_trajectories, mc_means_history, mc_covariances_history = mc_samples.monte_carlo_sub_trajectories(
+#     num_samples=num_samples, 
+#     backTspan=backTspan, 
+#     time_steps=time_steps, 
+#     num_time_steps=num_time_steps, 
+#     num_bundles=num_bundles, 
+#     sigmas_combined=sigmas_combined,  # From sigma point generation
+#     P_combined=P_combined,            # Original covariance matrix
+#     new_lam_bundles=new_lam_bundles, 
+#     mu=mu, 
+#     F=F, 
+#     c=c, 
+#     m0=m0, 
+#     g0=g0
+# )
 
-# Save the data
-joblib.dump({'mc_trajectories': mc_trajectories, 'mc_covariances_history': mc_covariances_history, 'mc_means_history': mc_means_history}, 'mc_data.pkl')
+# # Save the data
+# joblib.dump({'mc_trajectories': mc_trajectories, 'mc_covariances_history': mc_covariances_history, 'mc_means_history': mc_means_history}, 'mc_data.pkl')
 
 # # Print shapes to verify outputs
 # print("Monte Carlo Trajectories Shape:", mc_trajectories.shape)  # (num_bundles, num_samples, num_time_steps, 1000, 6)
