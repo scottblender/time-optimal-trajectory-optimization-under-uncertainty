@@ -10,11 +10,11 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
     time = [forwardTspan[time_steps[i]] for i in range(num_time_steps)]  # Ensure exact indices
     trajectories = []
 
-    # Storage for per-time-step covariance and mean
+    # Storage for per-time-step covariance and mean (Cartesian)
     P_combined_history = []
     means_history = []
 
-    # Training data storage
+    # Training data storage (MEE-based)
     state_history = []
     control_state_history = []
     covariance_history = []
@@ -31,6 +31,9 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
             new_lam = new_lam_bundles[idx_start, :, i]  # Get control state at exact time index
 
             sigma_points_final = []
+            full_state_sigma_points = []  # Store the MEE-based full state (7 elements)
+            cartesian_sigma_points = []  # Store Cartesian state history
+
             num_updates = 10  # Number of control updates
             sub_times = np.linspace(tstart, tend, num_updates + 1)
 
@@ -40,10 +43,11 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
             for sigma_idx in range(sigma_combined.shape[0]):
                 r0, v0, mass = sigma_combined[sigma_idx, :3], sigma_combined[sigma_idx, 3:6], sigma_combined[sigma_idx, 6]
                 initial_state = rv2mee.rv2mee(np.array([r0]), np.array([v0]), mu)
-                initial_state = np.append(initial_state, mass)
-                S = np.append(initial_state, new_lam)
+                initial_state = np.append(initial_state, mass)  # Append mass to MEE state
+                S = np.append(initial_state, new_lam)  # Append control states
 
-                full_states = []  # Store state trajectory for this sigma point
+                full_states = []  # Store state trajectory for this sigma point (MEE + mass)
+                cartesian_states = []  # Store Cartesian state trajectory
 
                 for k in range(num_updates):
                     tsub_start, tsub_end = sub_times[k], sub_times[k + 1]
@@ -63,33 +67,46 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
                         S = Sf.y[:, -1]  # Use last state for next step
 
                 full_states = np.vstack(full_states)  # Shape: (total time steps, 14)
+                full_state_sigma_points.append(full_states[:, :7])  # Store first 7 elements (MEE + mass)
 
+                # Convert to Cartesian for storage
                 r_new, v_new = mee2rv.mee2rv(full_states[:, 0], full_states[:, 1], full_states[:, 2], 
                                              full_states[:, 3], full_states[:, 4], full_states[:, 5], mu)
-                trajectory = np.hstack((r_new, v_new, full_states[:, 6].reshape(-1, 1)))  # Append mass
-                sigma_point_trajectories.append(trajectory)
-                sigma_points_final.append(trajectory)
+                cartesian_state = np.hstack((r_new, v_new, full_states[:, 6].reshape(-1, 1)))  # Append mass
+                cartesian_states.append(cartesian_state)
 
-                # Store control state history correctly (last 7 rows of full_states)
+                sigma_point_trajectories.append(cartesian_state)
+                sigma_points_final.append(cartesian_state)
+                cartesian_sigma_points.append(cartesian_state)
+
+                # Store control state history correctly (last 7 columns of full_states)
                 control_state_history.append(full_states[:, -7:])
 
-            sigma_points_final = np.array(sigma_points_final)  # Shape: (15, total_time_steps, 7)
+            full_state_sigma_points = np.array(full_state_sigma_points)  # Shape: (15, total_time_steps, 7)
+            cartesian_sigma_points = np.array(cartesian_sigma_points)  # Shape: (15, total_time_steps, 7)
 
-            # Compute mean
-            mean_state = np.sum(Wm[:, np.newaxis, np.newaxis] * sigma_points_final, axis=0)
+            # Compute mean for MEE-based full state
+            mean_state = np.sum(Wm[:, np.newaxis, np.newaxis] * full_state_sigma_points, axis=0)
 
-            # Compute covariance
-            deviations = sigma_points_final - mean_state[np.newaxis, :, :]
+            # Compute covariance for MEE-based full state
+            deviations = full_state_sigma_points - mean_state[np.newaxis, :, :]
             P_combined = np.einsum('i,ijk,ijl->jkl', Wc, deviations, deviations)
 
-            full_P_combined.append(P_combined)
-            full_means.append(mean_state)
+            # Compute mean for Cartesian state
+            mean_cartesian = np.sum(Wm[:, np.newaxis, np.newaxis] * cartesian_sigma_points, axis=0)
+
+            # Compute covariance for Cartesian state
+            deviations_cartesian = cartesian_sigma_points - mean_cartesian[np.newaxis, :, :]
+            P_combined_cartesian = np.einsum('i,ijk,ijl->jkl', Wc, deviations_cartesian, deviations_cartesian)
+
+            full_P_combined.append(P_combined_cartesian)
+            full_means.append(mean_cartesian)
             bundle_trajectories.append(sigma_point_trajectories)
 
-            # Store state history from sigma_points_final
-            for sigma_idx in range(sigma_points_final.shape[0]):
-                for step in range(sigma_points_final.shape[1]):  
-                    state_history.append(sigma_points_final[sigma_idx, step])  # Store per sigma point and time step
+            # Store state history from full_state_sigma_points (MEE-based)
+            for sigma_idx in range(full_state_sigma_points.shape[0]):  
+                for step in range(full_state_sigma_points.shape[1]):  
+                    state_history.append(full_state_sigma_points[sigma_idx, step])  # Store MEE-based state
                     mean_state_history.append(mean_state[step])  # Store per step
                     covariance_history.append(np.diagonal(P_combined[step], axis1=0, axis2=1))  # Store per step
 
@@ -98,21 +115,21 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
         trajectories.append(bundle_trajectories)
 
     # Convert training data into numpy arrays
-    state_history = np.vstack(state_history)  # (N_samples, 7)
+    state_history = np.vstack(state_history)  # (N_samples, 7) (MEE-based)
     control_state_history = np.vstack(control_state_history)  # (N_samples, 7)
     covariance_history = np.vstack(covariance_history)  # (N_samples, 7) - Only diagonal elements
     mean_state_history = np.vstack(mean_state_history)  # (N_samples, 7)
 
     # Print sample rows to verify consistency
-    print("First 10 rows of state_history:")
+    print("First 10 rows of state_history (MEE):")
     for i in range(min(10, state_history.shape[0])):
         print(f"Row {i}: {state_history[i]}")
 
-    print("\nFirst 10 rows of mean_state_history:")
+    print("\nFirst 10 rows of mean_state_history (MEE):")
     for i in range(min(10, mean_state_history.shape[0])):
         print(f"Row {i}: {mean_state_history[i]}")
 
-    # Construct final training dataset
+    # Construct final training dataset (MEE-based)
     X = np.hstack((state_history, covariance_history, mean_state_history))
     y = control_state_history  # Target variable: control states
 

@@ -8,14 +8,14 @@ data = joblib.load('data.pkl')
 X = data['X']
 y = data['y']
 
-# Define column names
+# Define column names for modified equinoctial elements (MEE)
 X_columns = [
-    'x', 'y', 'z', 'vx', 'vy', 'vz', 'm', 
-    'cov_x', 'cov_y', 'cov_z', 'cov_vx', 'cov_vy', 'cov_vz', 'cov_m',
-    'mean_x', 'mean_y', 'mean_z', 'mean_vx', 'mean_vy', 'mean_vz', 'mean_m'
+    'p', 'f', 'g', 'h', 'k', 'L', 'm',  # MEE elements + mass
+    'cov_p', 'cov_f', 'cov_g', 'cov_h', 'cov_k', 'cov_L', 'cov_m',  # Covariance diagonal elements
+    'mean_p', 'mean_f', 'mean_g', 'mean_h', 'mean_k', 'mean_L', 'mean_m'  # Mean values
 ]
 
-y_columns = ['lambda_x', 'lambda_y', 'lambda_z', 'lambda_vx', 'lambda_vy', 'lambda_vz', 'lambda_m']
+y_columns = ['lambda_p', 'lambda_f', 'lambda_g', 'lambda_h', 'lambda_k', 'lambda_L', 'lambda_m']  # Costates in MEE
 
 # Convert to DataFrame
 df_X = pd.DataFrame(X, columns=X_columns)
