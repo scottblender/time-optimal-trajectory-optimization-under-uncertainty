@@ -102,7 +102,7 @@ selected_time_steps = time_steps[tstart_index:tend_index + 1]  # Ensure inclusiv
 num_time_steps = len(selected_time_steps)
 
 # Solve the trajectory with covariance and get X and y
-trajectories, P_combined_history, means_history, X, y = solve_trajectories.solve_trajectories_with_covariance(
+trajectories, P_combined_history, means_history, X, y, time_match_indices = solve_trajectories.solve_trajectories_with_covariance(
     backTspan, time_steps, num_time_steps, num_bundles, sigmas_combined, 
     new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc
 )
@@ -118,7 +118,8 @@ joblib.dump({
     'P_combined_history': P_combined_history,
     'means_history': means_history,
     'X': X,
-    'y': y
+    'y': y,
+    'time_match_indices':time_match_indices
 }, 'data.pkl')
 
 # Select the bundle index (e.g., bundle 0)
