@@ -173,7 +173,8 @@ plt.rcParams.update({
 fig = plt.figure(figsize=(10, 8))
 ax = fig.add_subplot(111, projection='3d')
 
-bundle_idx = np.random.randint(0,trajectories.shape[0])
+#bundle_idx = np.random.randint(0,trajectories.shape[0])
+bundle_idx = 32
 bundle_trajectories = trajectories[bundle_idx]
 
 for sigma_idx in range(len(bundle_trajectories[0])):

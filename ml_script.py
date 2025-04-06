@@ -48,7 +48,8 @@ print(f"Train R²:  {train_r2:.6f}")
 print(f"Test R²:   {test_r2:.6f}")
 
 # Select a random bundle to visualize
-random_bundle_idx = int(np.random.choice(X[:, -2], size=1)[0])  # -2 is bundle_idx column
+#random_bundle_idx = int(np.random.choice(X[:, -2], size=1)[0])  # -2 is bundle_idx column
+random_bundle_idx = 32
 
 # Extract rows from test set that match the bundle
 test_bundle_mask = (X_test[:, -2] == random_bundle_idx)
