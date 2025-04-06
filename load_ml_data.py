@@ -4,28 +4,25 @@ import pandas as pd
 # Load the saved data
 data = joblib.load('data.pkl')
 
-# Extract X, y, and time history (assuming time is included in X)
+# Extract X, y, and time match indices
 X = data['X']
 y = data['y']
-time_match_indices = data['time_match_indices']
 
-# Define column names for modified equinoctial elements (MEE)
+# Define column names
 X_columns = [
     'time',  # Time information
     'p', 'f', 'g', 'h', 'k', 'L', 'm',  # MEE elements + mass
-    'cov_p', 'cov_f', 'cov_g', 'cov_h', 'cov_k', 'cov_L', 'cov_m',  # Covariance diagonal elements
-    'mean_p', 'mean_f', 'mean_g', 'mean_h', 'mean_k', 'mean_L', 'mean_m'  # Mean values
+    'cov_p', 'cov_f', 'cov_g', 'cov_h', 'cov_k', 'cov_L', 'cov_m',  # Covariance diagonals
+    'bundle_idx', 'sigma_point_idx'  # New metadata columns
 ]
 
-y_columns = ['lambda_p', 'lambda_f', 'lambda_g', 'lambda_h', 'lambda_k', 'lambda_L', 'lambda_m']  # Costates in MEE
+y_columns = ['lambda_p', 'lambda_f', 'lambda_g', 'lambda_h', 'lambda_k', 'lambda_L', 'lambda_m']
 
-# Add the time information as the first column in X
+# Convert to DataFrames
 df_X = pd.DataFrame(X, columns=X_columns)
-
-# Create DataFrame for y (control states)
 df_y = pd.DataFrame(y, columns=y_columns)
 
-# Display first few rows
+# Display sample output
 print("First few rows of X:")
 print(df_X.head())
 

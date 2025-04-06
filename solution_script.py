@@ -150,3 +150,52 @@ for i in range(len(time_indices)):
     # Extract the diagonal elements of the covariance matrix (position and velocity variances)
     position_variances.append([P[0, 0], P[1, 1], P[2, 2]])  # Variance of position (x, y, z)
     velocity_variances.append([P[3, 3], P[4, 4], P[5, 5]])  # Variance of velocity (vx, vy, vz)
+
+    # --------------------------
+# Plot the end-to-end trajectories for one bundle
+# --------------------------
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+# Set publication-style fonts and larger figure
+plt.rcParams.update({
+    'font.size': 10,
+    'axes.labelsize': 11,
+    'axes.titlesize': 13,
+    'legend.fontsize': 9,
+    'xtick.labelsize': 9,
+    'ytick.labelsize': 9,
+    'figure.figsize': (10, 8),
+    'figure.dpi': 150
+})
+
+# Plot all sigma point trajectories for one bundle
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+
+bundle_idx = np.random.randint(0,trajectories.shape[0])
+bundle_trajectories = trajectories[bundle_idx]
+
+for sigma_idx in range(len(bundle_trajectories[0])):
+    full_trajectory = np.concatenate([segment[sigma_idx] for segment in bundle_trajectories], axis=0)
+    r = full_trajectory[:, 0:3]  # Already in Cartesian
+
+    # Plot each trajectory
+    if sigma_idx == 0:
+        ax.plot(r[:, 0], r[:, 1], r[:, 2], color='red', linewidth=2, label='Sigma Point 0')
+    else:
+        ax.plot(r[:, 0], r[:, 1], r[:, 2], color='red', alpha=0.25)
+
+    # Add start and end point markers
+    ax.scatter(r[0, 0], r[0, 1], r[0, 2], color='limegreen', marker='X', s=60, edgecolor='black', label='Start' if sigma_idx == 0 else "")
+    ax.scatter(r[-1, 0], r[-1, 1], r[-1, 2], color='red', marker='X', s=60, edgecolor='black', label='End' if sigma_idx == 0 else "")
+
+# Format the plot
+ax.set_title(f"Sigma Point Trajectories for Bundle {bundle_idx}")
+ax.set_xlabel('X [km]')
+ax.set_ylabel('Y [km]')
+ax.set_zlabel('Z [km]')
+ax.view_init(elev=30, azim=135)
+ax.legend()
+plt.tight_layout()
+plt.show()
