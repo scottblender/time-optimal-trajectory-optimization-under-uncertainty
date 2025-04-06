@@ -134,19 +134,19 @@ for sigma_idx in unique_sigma_points:
 
    # Mark start and end points for each sigma point
     ax.scatter(r_eci_actual[0, 0], r_eci_actual[0, 1], r_eci_actual[0, 2],
-               color='lime', marker='X', s=60 if sigma_idx != 0 else 100,
+               color='lime', marker='X', s=60 if sigma_idx != 0 else 100, edgecolor='black',
                label='Start (Actual)' if sigma_idx == 0 else None)
 
     ax.scatter(r_eci_actual[-1, 0], r_eci_actual[-1, 1], r_eci_actual[-1, 2],
-               color='red', marker='X', s=60 if sigma_idx != 0 else 100,
+               color='red', marker='X', s=60 if sigma_idx != 0 else 100, edgecolor='black',
                label='End (Actual)' if sigma_idx == 0 else None)
 
     ax.scatter(r_eci_pred[0, 0], r_eci_pred[0, 1], r_eci_pred[0, 2],
-               color='green', marker='^', s=60 if sigma_idx != 0 else 100,
+               color='green', marker='^', s=60 if sigma_idx != 0 else 100, edgecolor='black',
                label='Start (Predicted)' if sigma_idx == 0 else None)
 
     ax.scatter(r_eci_pred[-1, 0], r_eci_pred[-1, 1], r_eci_pred[-1, 2],
-               color='blue', marker='^', s=60 if sigma_idx != 0 else 100,
+               color='blue', marker='^', s=60 if sigma_idx != 0 else 100, edgecolor='black',
                label='End (Predicted)' if sigma_idx == 0 else None)
 
 # Labels
