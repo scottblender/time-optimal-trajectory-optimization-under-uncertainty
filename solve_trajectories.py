@@ -4,23 +4,23 @@ import rv2mee
 import mee2rv
 import odefunc
 
-def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, num_bundles, sigmas_combined, 
-                                       new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc):
+def solve_trajectories_with_covariance(
+    backTspan, time_steps, num_time_steps, num_bundles, sigmas_combined,
+    new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc
+):
     forwardTspan = backTspan[::-1]
-    time = [forwardTspan[time_steps[i]] for i in range(num_time_steps)]  # Ensure exact indices
+    time = [forwardTspan[time_steps[i]] for i in range(num_time_steps)]
     trajectories = []
 
-    # Storage for covariance, means, and training data
+    # Storage for all collected training data
     P_combined_history = []
     means_history = []
     state_history = []
     control_state_history = []
     covariance_history = []
-    mean_state_history = []  # Comment this out if not needed in X
-    time_history = []  # Store time information
-    time_match_indices = []  # Store matching indices
-    bundle_index_history = []  # Track which bundle each row came from
-    sigma_point_index_history = []  # Track which sigma point each row came from
+    time_history = []
+    bundle_index_history = []
+    sigma_point_index_history = []
 
     for i in range(num_bundles):
         bundle_trajectories = []
@@ -30,12 +30,12 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
             sigma_point_trajectories = []
 
             idx_start = np.where(forwardTspan == tstart)[0][0]
-            new_lam = new_lam_bundles[idx_start, :, i]  # Get control state at exact time index
+            new_lam = new_lam_bundles[idx_start, :, i]
 
             full_state_sigma_points = []
             cartesian_sigma_points = []
 
-            num_updates = 10  # Number of control updates
+            num_updates = 10
             sub_times = np.linspace(tstart, tend, num_updates + 1)
 
             full_P_combined = []
@@ -83,10 +83,15 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
             full_state_sigma_points = np.array(full_state_sigma_points)
             cartesian_sigma_points = np.array(cartesian_sigma_points)
 
+            # Compute MEE-based mean and covariance
             mean_state = np.sum(Wm[:, np.newaxis, np.newaxis] * full_state_sigma_points, axis=0)
             deviations = full_state_sigma_points - mean_state[np.newaxis, :, :]
             P_combined = np.einsum('i,ijk,ijl->jkl', Wc, deviations, deviations)
 
+            # Diagonalize covariance matrices: zero off-diagonal elements
+            P_combined_diag = np.array([np.diag(np.diag(P)) for P in P_combined])
+
+            # Compute Cartesian-based mean and covariance
             mean_cartesian = np.sum(Wm[:, np.newaxis, np.newaxis] * cartesian_sigma_points, axis=0)
             deviations_cartesian = cartesian_sigma_points - mean_cartesian[np.newaxis, :, :]
             P_combined_cartesian = np.einsum('i,ijk,ijl->jkl', Wc, deviations_cartesian, deviations_cartesian)
@@ -95,11 +100,11 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
             full_means.append(mean_cartesian)
             bundle_trajectories.append(sigma_point_trajectories)
 
+            # Record data at each time step for all sigma points
             for sigma_idx in range(full_state_sigma_points.shape[0]):
                 for step in range(full_state_sigma_points.shape[1]):
                     state_history.append(full_state_sigma_points[sigma_idx, step])
-                    # mean_state_history.append(mean_state[step])  # Commented out if not needed
-                    covariance_history.append(np.diagonal(P_combined[step], axis1=0, axis2=1))
+                    covariance_history.append(np.diagonal(P_combined_diag[step]))
                     time_history.append(time_values[step])
                     bundle_index_history.append(i)
                     sigma_point_index_history.append(sigma_idx)
@@ -108,28 +113,27 @@ def solve_trajectories_with_covariance(backTspan, time_steps, num_time_steps, nu
         means_history.append(full_means)
         trajectories.append(bundle_trajectories)
 
+    # Convert histories to arrays
     time_history = np.hstack(time_history).reshape(-1, 1)
-    time_match_indices = np.where(np.isin(time_history.flatten(), forwardTspan))[0]
-
     state_history = np.vstack(state_history)
     control_state_history = np.vstack(control_state_history)
     covariance_history = np.vstack(covariance_history)
     bundle_index_history = np.array(bundle_index_history).reshape(-1, 1)
     sigma_point_index_history = np.array(sigma_point_index_history).reshape(-1, 1)
 
+    # Final feature matrix
     X = np.hstack((time_history, state_history, covariance_history, bundle_index_history, sigma_point_index_history))
     y = control_state_history
 
-    # ✅ Deduplicate based only on p, f, g, h, k, L (columns 1–6)
+    # Deduplicate by p, f, g, h, k, L
     mee_state_subset = X[:, 1:7]
     _, unique_indices = np.unique(mee_state_subset, axis=0, return_index=True)
-
     X_unique = X[unique_indices]
     y_unique = y[unique_indices]
 
-    # Sort by bundle_idx (col -2), then sigma_point_idx (col -1), then time (col 0)
+    # Sort by bundle_idx, sigma_point_idx, and time
     sort_indices = np.lexsort((X_unique[:, 0], X_unique[:, -1], X_unique[:, -2]))
     X_sorted = X_unique[sort_indices]
     y_sorted = y_unique[sort_indices]
 
-    return np.array(trajectories), np.array(P_combined_history), np.array(means_history), X_sorted, y_sorted, time_match_indices
+    return np.array(trajectories), np.array(P_combined_history), np.array(means_history), X_sorted, y_sorted

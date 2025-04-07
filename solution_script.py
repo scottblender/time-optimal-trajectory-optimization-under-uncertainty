@@ -102,7 +102,7 @@ selected_time_steps = time_steps[tstart_index:tend_index + 1]  # Ensure inclusiv
 num_time_steps = len(selected_time_steps)
 
 # Solve the trajectory with covariance and get X and y
-trajectories, P_combined_history, means_history, X, y, time_match_indices = solve_trajectories.solve_trajectories_with_covariance(
+trajectories, P_combined_history, means_history, X, y = solve_trajectories.solve_trajectories_with_covariance(
     backTspan, time_steps, num_time_steps, num_bundles, sigmas_combined, 
     new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc
 )
@@ -119,11 +119,10 @@ joblib.dump({
     'means_history': means_history,
     'X': X,
     'y': y,
-    'time_match_indices':time_match_indices
 }, 'data.pkl')
 
 # Select the bundle index (e.g., bundle 0)
-bundle_index = 0
+bundle_index = 32
 
 # Select the time steps you want to plot (this will correspond to the indices of time steps)
 time_indices = range(num_time_steps-1)
@@ -196,7 +195,7 @@ ax.set_title(f"Sigma Point Trajectories for Bundle {bundle_idx}")
 ax.set_xlabel('X [km]')
 ax.set_ylabel('Y [km]')
 ax.set_zlabel('Z [km]')
-ax.view_init(elev=30, azim=135)
+ax.view_init(elev=25, azim=120)
 ax.legend()
 plt.tight_layout()
 plt.show()
