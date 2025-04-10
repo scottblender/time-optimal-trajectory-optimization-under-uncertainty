@@ -161,3 +161,4 @@ cython_debug/
 get-pip.py
 data.pkl
 *.pkl
+control_comparisons.txt
