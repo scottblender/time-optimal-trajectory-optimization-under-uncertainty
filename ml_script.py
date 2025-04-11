@@ -8,21 +8,27 @@ from sklearn.metrics import mean_squared_error, r2_score
 import odefunc
 import mee2rv
 import scipy.integrate
+from scipy.integrate import solve_ivp
 from scipy.linalg import eigh
+import pandas as pd
 
 def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.2, scale=3.0):
+    # Compute eigenvalues and eigenvectors of the covariance matrix.
     eigvals, eigvecs = eigh(cov)
     order = eigvals.argsort()[::-1]
     eigvals = eigvals[order]
     eigvecs = eigvecs[:, order]
 
+    # Compute radii by scaling the standard deviations.
     radii = scale * np.sqrt(np.maximum(eigvals, 0))
+    # Create a mesh grid for a sphere.
     u = np.linspace(0, 2 * np.pi, 20)
     v = np.linspace(0, np.pi, 20)
     x = radii[0] * np.outer(np.cos(u), np.sin(v))
     y = radii[1] * np.outer(np.sin(u), np.sin(v))
     z = radii[2] * np.outer(np.ones_like(u), np.cos(v))
     coords = np.stack((x, y, z), axis=-1)
+    # Rotate and translate the sphere to form an ellipsoid.
     coords = coords @ eigvecs.T + mean
     ax.plot_surface(coords[:, :, 0], coords[:, :, 1], coords[:, :, 2],
                     rstride=1, cstride=1, alpha=alpha, color=color)
@@ -67,65 +73,111 @@ y_bundle_pred = rf.predict(X_bundle[:, :-2])
 
 unique_sigma_points = np.unique(X_bundle[:, -1].astype(int))
 
-# === 3D Trajectory Plot with Error Tubes and Start/End Ellipsoids ===
-fig = plt.figure(figsize=(12, 10))
-ax = fig.add_subplot(111, projection='3d')
+# Prepare a list to accumulate metrics per sigma point.
+table_data = []
+
+# Create a 3D plot of trajectories (with ellipsoids).
+fig_traj = plt.figure(figsize=(12, 10))
+ax_traj = fig_traj.add_subplot(111, projection='3d')
 
 for sigma_idx in unique_sigma_points:
     sigma_mask = (X_bundle[:, -1] == sigma_idx)
     X_sigma = X_bundle[sigma_mask]
     y_sigma_pred = y_bundle_pred[sigma_mask]
 
+    # Sort by time (assumed to be in the first column).
     sort_idx = np.argsort(X_sigma[:, 0])
     X_sigma = X_sigma[sort_idx]
     y_sigma_pred = y_sigma_pred[sort_idx]
 
+    # Get the actual trajectory (assumed to be defined on a fine time grid).
+    r_actual = trajectories[bundle_idx][0][sigma_idx][:, :3]
+
+    # Create a global time grid matching the actual trajectory.
+    global_times = np.linspace(X_sigma[0, 0], X_sigma[-1, 0], r_actual.shape[0])
+
+    # Build the predicted trajectory over the control segments.
     r_pred_all = []
     for i in range(len(X_sigma) - 1):
-        t0, t1 = X_sigma[i, 0], X_sigma[i + 1, 0]
+        t0, t1 = X_sigma[i, 0], X_sigma[i+1, 0]
+        # Use all time points in this segment.
+        seg_times = global_times[(global_times >= t0) & (global_times <= t1)]
         mee = X_sigma[i, 1:8]
         ctrl_pred = y_sigma_pred[i]
         S = np.concatenate([mee, ctrl_pred])
-        tspan = np.linspace(t0, t1, 20)
-        Sf = scipy.integrate.solve_ivp(lambda t, S: odefunc.odefunc(t, S, mu, F, c, m0, g0),
-                                       [t0, t1], S, t_eval=tspan)
-        r_xyz, _ = mee2rv.mee2rv(Sf.y.T[:, 0], Sf.y.T[:, 1], Sf.y.T[:, 2],
-                                 Sf.y.T[:, 3], Sf.y.T[:, 4], Sf.y.T[:, 5], mu)
+        Sf = solve_ivp(
+            lambda t, S: odefunc.odefunc(t, S, mu, F, c, m0, g0),
+            [t0, t1], S, t_eval=seg_times
+        )
+        r_xyz, _ = mee2rv.mee2rv(
+            Sf.y.T[:, 0], Sf.y.T[:, 1], Sf.y.T[:, 2],
+            Sf.y.T[:, 3], Sf.y.T[:, 4], Sf.y.T[:, 5],
+            mu
+        )
         r_pred_all.append(r_xyz)
-
     r_pred_all = np.vstack(r_pred_all)
-    r_actual = trajectories[bundle_idx][0][sigma_idx][:, :3]
 
-    print(f"\nSigma Point {sigma_idx}:")
-    print("  Actual Start :", np.round(r_actual[0], 6))
-    print("  Actual End   :", np.round(r_actual[-1], 6))
-    print("  Predicted Start:", np.round(r_pred_all[0], 6))
-    print("  Predicted End  :", np.round(r_pred_all[-1], 6))
+    # Compute the per-coordinate MSE (mean squared error).
+    mse_x = np.mean((r_pred_all[:, 0] - r_actual[:, 0])**2)
+    mse_y = np.mean((r_pred_all[:, 1] - r_actual[:, 1])**2)
+    mse_z = np.mean((r_pred_all[:, 2] - r_actual[:, 2])**2)
+    # Compute the overall MSE (averaged across all coordinates).
+    mse_overall = mean_squared_error(r_actual, r_pred_all)
 
-    ax.plot(r_actual[:, 0], r_actual[:, 1], r_actual[:, 2], color='red', linestyle='-', alpha=0.4)
-    ax.plot(r_pred_all[:, 0], r_pred_all[:, 1], r_pred_all[:, 2], color='blue', linestyle='--', alpha=0.7)
+    # Compute overall maximum L2 error (Euclidean norm) across time.
+    error_l2 = np.linalg.norm(r_pred_all - r_actual, axis=1)
+    max_l2 = np.max(error_l2)
+    
+    # Compute maximum L2 error per coordinate (absolute error per component).
+    max_l2_x = np.max(np.abs(r_pred_all[:, 0] - r_actual[:, 0]))
+    max_l2_y = np.max(np.abs(r_pred_all[:, 1] - r_actual[:, 1]))
+    max_l2_z = np.max(np.abs(r_pred_all[:, 2] - r_actual[:, 2]))
+    
+    table_data.append({
+        "Sigma Point": sigma_idx,
+        "MSE (overall)": mse_overall,
+        "MSE (X)": mse_x,
+        "MSE (Y)": mse_y,
+        "MSE (Z)": mse_z,
+        "Max L2 Norm (overall)": max_l2,
+        "Max L2 Norm (X)": max_l2_x,
+        "Max L2 Norm (Y)": max_l2_y,
+        "Max L2 Norm (Z)": max_l2_z
+    })
 
-    ax.scatter(*r_actual[0], color='lime', marker='X', s=50, edgecolor='k')
-    ax.scatter(*r_actual[-1], color='red', marker='X', s=50, edgecolor='k')
-    ax.scatter(*r_pred_all[0], color='green', marker='^', s=50, edgecolor='k')
-    ax.scatter(*r_pred_all[-1], color='blue', marker='^', s=50, edgecolor='k')
+    # Plot the actual and predicted trajectories.
+    ax_traj.plot(r_actual[:, 0], r_actual[:, 1], r_actual[:, 2],
+                 color='red', linestyle='-', alpha=0.4)
+    ax_traj.plot(r_pred_all[:, 0], r_pred_all[:, 1], r_pred_all[:, 2],
+                 color='blue', linestyle='--', alpha=0.7)
+    ax_traj.scatter(*r_actual[0], color='lime', marker='X', s=50, edgecolor='k')
+    ax_traj.scatter(*r_actual[-1], color='red', marker='X', s=50, edgecolor='k')
+    ax_traj.scatter(*r_pred_all[0], color='green', marker='^', s=50, edgecolor='k')
+    ax_traj.scatter(*r_pred_all[-1], color='blue', marker='^', s=50, edgecolor='k')
 
-    if sigma_idx == 0:
+    # Add ellipsoids for the first sigma point using its covariance history.
+    if sigma_idx == unique_sigma_points[0]:
         P = P_combined_history[bundle_idx][0]
-        # Add ellipsoids throughout the trajectory (error tube)
-        for k in range(0, len(P), max(1, len(P) // 5)):
-            plot_3sigma_ellipsoid(ax, r_actual[k], P[k][:3, :3], color='orange', alpha=0.1)
-        # Add ellipsoids at start and end
-        plot_3sigma_ellipsoid(ax, r_actual[0], P[0][:3, :3], color='orange', alpha=0.3)
-        plot_3sigma_ellipsoid(ax, r_actual[-1], P[-1][:3, :3], color='orange', alpha=0.3)
+        for k in range(0, len(P), max(1, len(P)//5)):
+            plot_3sigma_ellipsoid(ax_traj, r_actual[k], P[k][:3, :3], color='orange', alpha=0.1)
+        plot_3sigma_ellipsoid(ax_traj, r_actual[0], P[0][:3, :3], color='orange', alpha=0.3)
+        plot_3sigma_ellipsoid(ax_traj, r_actual[-1], P[-1][:3, :3], color='orange', alpha=0.3)
 
-ax.set_title(f"Predicted vs Actual End-to-End Trajectories\nNominal Trajectory {bundle_idx}", fontsize=14)
-ax.set_xlabel('X [km]')
-ax.set_ylabel('Y [km]')
-ax.set_zlabel('Z [km]')
-ax.view_init(elev=25, azim=120)
-ax.set_box_aspect([1, 1, 0.5])
-ax.legend(['Actual', 'Predicted'], loc='upper left')
+# Finalize the 3D plot.
+ax_traj.set_title(f"Predicted vs Actual End-to-End Trajectories\nNominal Trajectory {bundle_idx}", fontsize=14)
+ax_traj.set_xlabel('X [km]')
+ax_traj.set_ylabel('Y [km]', labelpad=20)
+ax_traj.set_zlabel('Z [km]')
+ax_traj.view_init(elev=25, azim=120)
+ax_traj.set_box_aspect([1, 1, 0.5])
+ax_traj.legend(['Actual', 'Predicted'], loc='upper left')
 plt.tight_layout()
 plt.show()
 
+# Format floating-point numbers to 6 decimal places.
+pd.options.display.float_format = '{:.8f}'.format
+
+# Create and print the table of metrics.
+df = pd.DataFrame(table_data)
+print("\nSummary of Per-Coordinate and Overall MSE and Max L2 Norm for Each Sigma Point:")
+print(df.to_string(index=False))
