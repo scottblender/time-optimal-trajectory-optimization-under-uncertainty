@@ -7,7 +7,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 import odefunc
 import mee2rv
-import scipy.integrate
 from scipy.integrate import solve_ivp
 from scipy.linalg import eigh
 import pandas as pd
@@ -75,6 +74,8 @@ unique_sigma_points = np.unique(X_bundle[:, -1].astype(int))
 
 # Prepare a list to accumulate metrics per sigma point.
 table_data = []
+# Also prepare a list to store L2 norm error data for log-scale plotting.
+sigma_error_data = []
 
 # Create a 3D plot of trajectories (with ellipsoids).
 fig_traj = plt.figure(figsize=(12, 10))
@@ -124,11 +125,11 @@ for sigma_idx in unique_sigma_points:
     # Compute the overall MSE (averaged across all coordinates).
     mse_overall = mean_squared_error(r_actual, r_pred_all)
 
-    # Compute overall maximum L2 error (Euclidean norm) across time.
+    # Compute overall L2 error (Euclidean norm) over time.
     error_l2 = np.linalg.norm(r_pred_all - r_actual, axis=1)
     max_l2 = np.max(error_l2)
     
-    # Compute maximum L2 error per coordinate (absolute error per component).
+    # Compute maximum L2 error per coordinate.
     max_l2_x = np.max(np.abs(r_pred_all[:, 0] - r_actual[:, 0]))
     max_l2_y = np.max(np.abs(r_pred_all[:, 1] - r_actual[:, 1]))
     max_l2_z = np.max(np.abs(r_pred_all[:, 2] - r_actual[:, 2]))
@@ -143,6 +144,13 @@ for sigma_idx in unique_sigma_points:
         "Max L2 Norm (X)": max_l2_x,
         "Max L2 Norm (Y)": max_l2_y,
         "Max L2 Norm (Z)": max_l2_z
+    })
+    
+    # Store L2 error and global_times for log-scale plot.
+    sigma_error_data.append({
+        "sigma": sigma_idx,
+        "global_times": global_times,
+        "error_l2": error_l2
     })
 
     # Plot the actual and predicted trajectories.
@@ -163,7 +171,7 @@ for sigma_idx in unique_sigma_points:
         plot_3sigma_ellipsoid(ax_traj, r_actual[0], P[0][:3, :3], color='orange', alpha=0.3)
         plot_3sigma_ellipsoid(ax_traj, r_actual[-1], P[-1][:3, :3], color='orange', alpha=0.3)
 
-# Finalize the 3D plot.
+# Finalize the 3D trajectory plot.
 ax_traj.set_title(f"Predicted vs Actual End-to-End Trajectories\nNominal Trajectory {bundle_idx}", fontsize=14)
 ax_traj.set_xlabel('X [km]')
 ax_traj.set_ylabel('Y [km]', labelpad=20)
@@ -181,3 +189,5 @@ pd.options.display.float_format = '{:.8f}'.format
 df = pd.DataFrame(table_data)
 print("\nSummary of Per-Coordinate and Overall MSE and Max L2 Norm for Each Sigma Point:")
 print(df.to_string(index=False))
+
+
