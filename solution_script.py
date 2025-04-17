@@ -30,6 +30,60 @@ num_bundles = 100
 r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan = compute_bundle_trajectory_params.compute_bundle_trajectory_params(
     p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, num_bundles
 )
+# === Plot Bundle Trajectories  ===
+# Create a 3D plot to visualize the nominal and perturbed position trajectories
+fig = plt.figure(figsize=(12, 9))
+ax = fig.add_subplot(111, projection='3d')
+
+# Extract the x, y, z coordinates of the nominal position trajectory
+x_r = r_tr[:,0]
+y_r = r_tr[:,1]
+z_r = r_tr[:,2]
+
+# Plot all perturbed bundle trajectories
+for i in range(num_bundles):
+    x_r_bundle = r_bundles[::-1, 0, i]
+    y_r_bundle = r_bundles[::-1, 1, i]
+    z_r_bundle = r_bundles[::-1, 2, i]
+    ax.plot(x_r_bundle, y_r_bundle, z_r_bundle, color='blue', alpha=0.15, linewidth=1)
+
+# Plot the nominal trajectory
+ax.plot(x_r, y_r, z_r, color='black', linewidth=2.5, label='Nominal Trajectory')
+
+# Mark start and end of nominal trajectory
+ax.scatter(x_r[0], y_r[0], z_r[0], color='green', marker='o', s=50, label='Start')
+ax.scatter(x_r[-1], y_r[-1], z_r[-1], color='red', marker='X', s=60, label='End')
+
+# Formatting
+ax.set_xlabel('X Position [km]')
+ax.set_ylabel('Y Position [km]')
+ax.set_zlabel('Z Position [km]')
+ax.set_box_aspect([1.25, 1, 0.75])
+ax.grid(True)
+ax.legend(loc='upper left', fontsize=10)
+plt.tight_layout()
+plt.show()
+
+# === Plot Nominal Trajectory Only ===
+fig_nominal = plt.figure(figsize=(10, 8))
+ax_nominal = fig_nominal.add_subplot(111, projection='3d')
+
+# Plot nominal trajectory
+ax_nominal.plot(r_tr[:, 0], r_tr[:, 1], r_tr[:, 2], color='black', linewidth=3, label='Nominal Trajectory')
+
+# Start and end points
+ax_nominal.scatter(r_tr[0, 0], r_tr[0, 1], r_tr[0, 2], color='green', marker='o', s=30, label='Start')
+ax_nominal.scatter(r_tr[-1, 0], r_tr[-1, 1], r_tr[-1, 2], color='red', marker='X', s=30, label='End')
+
+# Axis labels
+ax_nominal.set_xlabel('X [km]')
+ax_nominal.set_ylabel('Y [km]')
+ax_nominal.set_zlabel('Z [km]')
+ax.view_init(elev=25, azim=135)
+ax.set_box_aspect([1.25, 1, 0.75])
+ax_nominal.legend(loc='upper left')
+plt.tight_layout()
+plt.show()
 
 bundle_index = 32
 S_bundles = S_bundles[::-1, :, bundle_index:bundle_index+1]
