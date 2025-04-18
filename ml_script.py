@@ -36,13 +36,7 @@ def train_and_evaluate(label, X, y):
     print(f"\n--- {label} Model ---")
     print(f"Train MSE: {mean_squared_error(y_train, y_pred_train):.6f}")
     print(f"Test MSE:  {mean_squared_error(y_test, y_pred_test):.6f}")
-    print(f"Train R²:  {r2_score(y_train, y_pred_train):.6f}")
-    print(f"Test R²:   {r2_score(y_test, y_pred_test):.6f}")
-
-    mape = np.mean(np.abs((y_test - y_pred_test) / np.abs(y_test)))
-    print("Mean Absolute Percentage Error (MAPE):", round(mape * 100, 2))
-    print("Accuracy:", round(100 * (1 - mape), 2))
-
+    
     return rf
 
 rf_sigma = train_and_evaluate("Sigma Point", data_sigma['X'], data_sigma['y'])
