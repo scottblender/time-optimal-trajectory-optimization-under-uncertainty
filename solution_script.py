@@ -292,3 +292,11 @@ trajectory_df = pd.DataFrame(trajectory_rows, columns=[
     "time"
 ])
 trajectory_df.to_csv("expected_trajectories_full.csv", index=False)
+
+# --- 3. Export Sigma Point Weights ---
+weights_df = pd.DataFrame({
+    "sigma_index": np.arange(len(Wm)),
+    "Wm": Wm,
+    "Wc": Wc
+})
+weights_df.to_csv("sigma_weights.csv", index=False)
