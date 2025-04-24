@@ -243,12 +243,13 @@ bundle_r = r_bundles[:, :, 0]    # shape (T, 3)
 bundle_v = v_bundles[:, :, 0]    # shape (T, 3)
 bundle_m = mass_bundles[:, 0]    # shape (T,)
 bundle_lam = new_lam_bundles[:, :, 0]  # shape (T, 7)
+backTspan_reversed = backTspan[::-1]
 
 # --- 1. Initial CSV: [t, x, y, z, vx, vy, vz, m, lam0..lam6, bundle] ---
 initial_data = []
-for t_idx in range(len(backTspan)):
+for t_idx in range(len(backTspan_reversed)):
     row = [
-        backTspan[t_idx],
+        backTspan_reversed[t_idx],
         *bundle_r[t_idx], *bundle_v[t_idx],
         bundle_m[t_idx],
         *bundle_lam[t_idx],
@@ -262,41 +263,3 @@ initial_df = pd.DataFrame(initial_data, columns=[
     "bundle_index"
 ])
 initial_df.to_csv("initial_bundle_32.csv", index=False)
-
-
-# --- 2. Expected Trajectory CSV: [bundle, sigma, x, y, z, vx, vy, vz, m, lam0..lam6, time] ---
-trajectory_rows = []
-trajectory_data = trajectories[0]  # shape [segments][sigma][T, 7]
-time_full = np.concatenate([
-    np.linspace(backTspan[i], backTspan[i+1], trajectory_data[i].shape[1])
-    for i in range(len(trajectory_data))
-])
-
-for sigma_idx in range(len(trajectory_data[0])):  # across sigma points
-    full_sigma_traj = np.concatenate(
-        [trajectory_data[i][sigma_idx] for i in range(len(trajectory_data))], axis=0
-    )  # shape [T, 7]
-    for t_idx, state in enumerate(full_sigma_traj):
-        row = [
-            bundle_index,
-            sigma_idx,
-            *state[:7],         # [x, y, z, vx, vy, vz, m]
-            *bundle_lam[t_idx % len(bundle_lam)],  # cycle if needed
-            time_full[t_idx]
-        ]
-        trajectory_rows.append(row)
-
-trajectory_df = pd.DataFrame(trajectory_rows, columns=[
-    "bundle", "sigma", "x", "y", "z", "vx", "vy", "vz", "mass",
-    "lam0", "lam1", "lam2", "lam3", "lam4", "lam5", "lam6",
-    "time"
-])
-trajectory_df.to_csv("expected_trajectories_full.csv", index=False)
-
-# --- 3. Export Sigma Point Weights ---
-weights_df = pd.DataFrame({
-    "sigma_index": np.arange(len(Wm)),
-    "Wm": Wm,
-    "Wc": Wc
-})
-weights_df.to_csv("sigma_weights.csv", index=False)
