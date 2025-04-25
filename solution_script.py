@@ -266,6 +266,7 @@ initial_df.to_csv("initial_bundle_32.csv", index=False)
 
 # === Save Full Propagated Sigma Point Trajectories as CSV ===
 expected_data = []
+tstart, tend = backTspan_reversed[tstart_index], backTspan_reversed[tend_index]
 for sigma_idx in range(len(bundle_trajectories[0])):
     full_trajectory = np.concatenate([segment[sigma_idx] for segment in bundle_trajectories], axis=0)
     times = np.linspace(tstart, tend, full_trajectory.shape[0])
