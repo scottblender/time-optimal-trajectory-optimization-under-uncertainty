@@ -263,3 +263,21 @@ initial_df = pd.DataFrame(initial_data, columns=[
     "bundle_index"
 ])
 initial_df.to_csv("initial_bundle_32.csv", index=False)
+
+# === Save Full Propagated Sigma Point Trajectories as CSV ===
+expected_data = []
+for sigma_idx in range(len(bundle_trajectories[0])):
+    full_trajectory = np.concatenate([segment[sigma_idx] for segment in bundle_trajectories], axis=0)
+    times = np.linspace(tstart, tend, full_trajectory.shape[0])
+    for t_idx, row in enumerate(full_trajectory):
+        expected_data.append([
+            bundle_index,
+            sigma_idx,
+            *row[:7],  # x, y, z, vx, vy, vz, mass
+            times[t_idx]
+        ])
+
+expected_df = pd.DataFrame(expected_data, columns=[
+    "bundle", "sigma", "x", "y", "z", "vx", "vy", "vz", "mass", "time"
+])
+expected_df.to_csv("expected_trajectories_bundle_32.csv", index=False)
