@@ -11,6 +11,37 @@ import generate_monte_carlo_trajectories
 from scipy.linalg import eigh
 from matplotlib.patches import Patch
 
+def create_initial_csv_for_multiple_bundles(
+    backTspan, r_bundles, v_bundles, mass_bundles, new_lam_bundles,
+    bundle_indices, output_filename="initial_bundles_32_33.csv"
+):
+    backTspan_reversed = backTspan[::-1]
+    combined_data = []
+
+    for bundle_index in bundle_indices:
+        bundle_r = r_bundles[::-1, :, bundle_index]
+        bundle_v = v_bundles[::-1, :, bundle_index]
+        bundle_m = mass_bundles[::-1, bundle_index]
+        bundle_lam = new_lam_bundles[::-1, :, bundle_index]
+
+        for t_idx in range(len(backTspan_reversed)):
+            row = [
+                backTspan_reversed[t_idx],
+                *bundle_r[t_idx], *bundle_v[t_idx],
+                bundle_m[t_idx],
+                *bundle_lam[t_idx],
+                bundle_index
+            ]
+            combined_data.append(row)
+
+    df = pd.DataFrame(combined_data, columns=[
+        "time", "x", "y", "z", "vx", "vy", "vz", "mass",
+        "lam0", "lam1", "lam2", "lam3", "lam4", "lam5", "lam6",
+        "bundle_index"
+    ])
+    df.to_csv(output_filename, index=False)
+
+
 def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.2, scale=3.0):
     eigvals, eigvecs = eigh(cov)
     radii = scale * np.sqrt(np.maximum(eigvals, 0))
@@ -31,6 +62,17 @@ num_bundles = 100
 r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan = compute_bundle_trajectory_params.compute_bundle_trajectory_params(
     p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, num_bundles
 )
+
+create_initial_csv_for_multiple_bundles(
+    backTspan=backTspan,
+    r_bundles=r_bundles,
+    v_bundles=v_bundles,
+    mass_bundles=mass_bundles,
+    new_lam_bundles=new_lam_bundles,
+    bundle_indices=[32, 33],
+    output_filename="initial_bundles_32_33.csv"
+)
+
 # === Plot Bundle Trajectories  ===
 # Create a 3D plot to visualize the nominal and perturbed position trajectories
 fig = plt.figure(figsize=(12, 9))
@@ -237,34 +279,9 @@ ax.legend(handles, labels, loc='upper left', fontsize=10)
 plt.tight_layout()
 plt.show()
 
-# === CSV Export for C++ Integration ===
-bundle_index = 32
-bundle_r = r_bundles[:, :, 0]    # shape (T, 3)
-bundle_v = v_bundles[:, :, 0]    # shape (T, 3)
-bundle_m = mass_bundles[:, 0]    # shape (T,)
-bundle_lam = new_lam_bundles[:, :, 0]  # shape (T, 7)
-backTspan_reversed = backTspan[::-1]
-
-# --- 1. Initial CSV: [t, x, y, z, vx, vy, vz, m, lam0..lam6, bundle] ---
-initial_data = []
-for t_idx in range(len(backTspan_reversed)):
-    row = [
-        backTspan_reversed[t_idx],
-        *bundle_r[t_idx], *bundle_v[t_idx],
-        bundle_m[t_idx],
-        *bundle_lam[t_idx],
-        bundle_index
-    ]
-    initial_data.append(row)
-
-initial_df = pd.DataFrame(initial_data, columns=[
-    "time", "x", "y", "z", "vx", "vy", "vz", "mass",
-    "lam0", "lam1", "lam2", "lam3", "lam4", "lam5", "lam6",
-    "bundle_index"
-])
-initial_df.to_csv("initial_bundle_32.csv", index=False)
 
 # === Save Full Propagated Sigma Point Trajectories as CSV ===
+backTspan_reversed = backTspan[::-1]
 expected_data = []
 tstart, tend = backTspan_reversed[tstart_index], backTspan_reversed[tend_index]
 for sigma_idx in range(len(bundle_trajectories[0])):
