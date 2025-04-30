@@ -69,8 +69,8 @@ create_initial_csv_for_multiple_bundles(
     v_bundles=v_bundles,
     mass_bundles=mass_bundles,
     new_lam_bundles=new_lam_bundles,
-    bundle_indices=[32, 33],
-    output_filename="initial_bundles_32_33.csv"
+    bundle_indices=list(range(num_bundles-25)),
+    output_filename="initial_bundles_all.csv"
 )
 
 # === Plot Bundle Trajectories  ===
