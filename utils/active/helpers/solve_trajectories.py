@@ -61,13 +61,17 @@ def solve_trajectories_with_covariance(
                 full_states = []
                 cartesian_states = []
 
+                prev_lam_mean = new_lam.copy()  # set the initial mean before subintervals
+
                 for k in range(num_updates):
                     tsub_start, tsub_end = sub_times[k], sub_times[k + 1]
 
                     if k == 0:
                         new_lam_current = new_lam
                     else:
-                        new_lam_current = sample_within_bounds(new_lam, P_lam)
+                        new_lam_current = sample_within_bounds(prev_lam_mean, P_lam)
+
+                    prev_lam_mean = new_lam_current.copy()  # update for next subinterval
 
                     S[-7:] = new_lam_current
                     func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
@@ -132,8 +136,7 @@ def solve_trajectories_with_covariance(
     X = np.hstack((time_history, state_history, covariance_history, bundle_index_history, sigma_point_index_history))
     y = control_state_history
 
-    mee_state_subset = X[:, 1:7]
-    _, unique_indices = np.unique(mee_state_subset, axis=0, return_index=True)
+    _, unique_indices = np.unique(X[:, [0, -1]], axis=0, return_index=True)
     X_unique = X[unique_indices]
     y_unique = y[unique_indices]
 

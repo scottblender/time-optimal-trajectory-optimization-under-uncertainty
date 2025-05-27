@@ -6,6 +6,8 @@ import joblib
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
+from propagate_sensitivity import propagate_sensitivity_with_evolving_mean
+from sensitivity_metrics import compute_sensitivity_metrics
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import generate_sigma_points
@@ -302,3 +304,61 @@ expected_df = pd.DataFrame(expected_data, columns=[
     "bundle", "sigma", "x", "y", "z", "vx", "vy", "vz", "mass", "time"
 ])
 expected_df.to_csv("expected_trajectories_bundle_32.csv", index=False)
+
+
+# === Prepare and Run Sensitivity Analysis ===
+# Combine state and control history from solve_trajectories
+control_dataset = np.hstack((X, y))
+
+# Generate sensitivity trajectories with consistent initial conditions
+sensitivity_df = propagate_sensitivity_with_evolving_mean(
+    sigmas_combined=sigmas_combined,
+    y_sorted=control_dataset,
+    backTspan=backTspan,
+    time_steps=time_steps,
+    num_time_steps=num_time_steps,
+    mu=mu, F=F, c=c, m0=m0, g0=g0
+)
+
+# === Plot Full Sensitivity Trajectories for σ₀ ===
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+colors = {'mean': 'black', 'plus3': 'red', 'minus3': 'blue'}
+
+fig = plt.figure(figsize=(12, 9))
+ax = fig.add_subplot(111, projection='3d')
+
+for lam_type in ["mean", "plus3", "minus3"]:
+    df_subset = sensitivity_df[
+        (sensitivity_df["sigma_idx"] == 0) &
+        (sensitivity_df["lam_type"] == lam_type)
+    ].copy()
+
+    df_subset.sort_values(by="time", inplace=True)
+
+    if not df_subset.empty:
+        ax.plot(df_subset["x"], df_subset["y"], df_subset["z"],
+                label=f"{lam_type} λ",
+                color=colors[lam_type], linewidth=2.0, alpha=0.85)
+
+        ax.scatter(df_subset.iloc[0]["x"], df_subset.iloc[0]["y"], df_subset.iloc[0]["z"],
+                   color=colors[lam_type], marker='o', s=30)
+        ax.scatter(df_subset.iloc[-1]["x"], df_subset.iloc[-1]["y"], df_subset.iloc[-1]["z"],
+                   color=colors[lam_type], marker='X', s=30)
+
+ax.set_title("Full Sensitivity Trajectories: σ₀ (All Intervals)")
+ax.set_xlabel("X [km]")
+ax.set_ylabel("Y [km]")
+ax.set_zlabel("Z [km]")
+ax.legend()
+ax.set_box_aspect([1.25, 1, 0.75])
+plt.tight_layout()
+plt.show()
+
+# === Compute Metrics for Sensitivity Analysis ===
+metrics = compute_sensitivity_metrics(sensitivity_df, sigma_idx=0)
+for variant, vals in metrics.items():
+    print(f"{variant.upper()} CONTROL:")
+    print(f"  Max MSE: {vals['max_mse']:.4e} km²")
+    print(f"  Final position deviation: {vals['final_pos_deviation_km']:.6f} km")
