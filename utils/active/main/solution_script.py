@@ -3,6 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.linalg import eigh
 import joblib
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import generate_sigma_points

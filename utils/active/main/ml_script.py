@@ -6,7 +6,11 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.integrate import solve_ivp
 from scipy.linalg import eigh
-import mee2rv, odefunc
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
+import mee2rv
+import odefunc
 
 def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.05, scale=3.0):
     eigvals, eigvecs = eigh(cov)
