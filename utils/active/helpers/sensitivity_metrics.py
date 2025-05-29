@@ -1,37 +1,47 @@
 import numpy as np
+import pandas as pd
 
-def compute_sensitivity_metrics(sensitivity_df, sigma_idx=0):
+def compute_sensitivity_metrics_all_sigmas(sensitivity_df):
     """
-    Computes max MSE over time and final position deviation for plus3 and minus3 vs mean.
+    Computes max MSE and final position deviation for each sigma_idx
+    comparing plus3 and minus3 against the mean trajectory.
+    
+    Returns:
+        DataFrame with columns:
+        ['sigma_idx', 'variant', 'max_mse', 'final_pos_deviation_km']
     """
-    metrics = {}
-    for variant in ["plus3", "minus3"]:
+    all_metrics = []
+
+    unique_sigmas = sensitivity_df["sigma_idx"].unique()
+    for sigma_idx in sorted(unique_sigmas):
         df_mean = sensitivity_df[
             (sensitivity_df["sigma_idx"] == sigma_idx) &
             (sensitivity_df["lam_type"] == "mean")
         ].sort_values("time")
 
-        df_var = sensitivity_df[
-            (sensitivity_df["sigma_idx"] == sigma_idx) &
-            (sensitivity_df["lam_type"] == variant)
-        ].sort_values("time")
+        for variant in ["plus3", "minus3"]:
+            df_var = sensitivity_df[
+                (sensitivity_df["sigma_idx"] == sigma_idx) &
+                (sensitivity_df["lam_type"] == variant)
+            ].sort_values("time")
 
-        # Align time and ensure same length
-        if df_mean.shape[0] != df_var.shape[0]:
-            raise ValueError(f"Mismatch in length for mean vs {variant} trajectories")
+            if df_mean.shape[0] != df_var.shape[0]:
+                print(f"Skipping sigma_idx {sigma_idx}, variant {variant} due to mismatched length.")
+                continue
 
-        # Compute MSE over position
-        pos_mean = df_mean[["x", "y", "z"]].values
-        pos_var = df_var[["x", "y", "z"]].values
-        mse_per_step = np.mean((pos_mean - pos_var)**2, axis=1)
-        max_mse = np.max(mse_per_step)
+            pos_mean = df_mean[["x", "y", "z"]].values
+            pos_var = df_var[["x", "y", "z"]].values
 
-        # Compute final position deviation
-        final_dev = np.linalg.norm(pos_mean[-1] - pos_var[-1])
+            mse_per_step = np.mean((pos_mean - pos_var)**2, axis=1)
+            max_mse = np.max(mse_per_step)
 
-        metrics[variant] = {
-            "max_mse": max_mse,
-            "final_pos_deviation_km": final_dev
-        }
+            final_dev = np.linalg.norm(pos_mean[-1] - pos_var[-1])
 
-    return metrics
+            all_metrics.append({
+                "sigma_idx": sigma_idx,
+                "variant": variant,
+                "max_mse": max_mse,
+                "final_pos_deviation_km": final_dev
+            })
+
+    return pd.DataFrame(all_metrics)

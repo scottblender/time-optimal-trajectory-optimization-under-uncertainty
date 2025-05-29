@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 from propagate_sensitivity import propagate_sensitivity_with_evolving_mean
-from sensitivity_metrics import compute_sensitivity_metrics
+from sensitivity_metrics import compute_sensitivity_metrics_all_sigmas
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import generate_sigma_points
@@ -140,13 +140,61 @@ v_bundles = v_bundles[::-1, :, bundle_index:bundle_index+1]
 new_lam_bundles = new_lam_bundles[::-1, :, bundle_index:bundle_index+1]
 mass_bundles = mass_bundles[::-1, bundle_index:bundle_index+1]
 
-time_steps = np.arange(len(backTspan))
+# === Sigma Point Generation for Different Time Strides ===
+nsd = 7
+P_pos = np.eye(3) * 0.01
+P_vel = np.eye(3) * 0.0001
+P_mass = np.array([[0.0001]])
+alpha, beta, kappa = 1.7215, 2, float((3 - nsd))
+
+# === Generate Data for Different Time Strides  ===
+time_strides_to_test = [1, 2, 5, 10]  # Define the time strides you want to evaluate
+
+for stride in time_strides_to_test:
+    print(f"\n=== Evaluating Time Stride: {stride} ===")
+
+    # Select strided time steps
+    time_steps = np.arange(len(backTspan), step=stride)
+    tstart_index, tend_index = 0, 1
+    tstart, tend = backTspan[tstart_index], backTspan[tend_index]
+    time_steps_strided = time_steps[tstart_index:tend_index + 1]
+    num_time_steps = len(time_steps_strided)
+
+    # Generate sigma points
+    sigmas_combined, P_combined, _, _, Wm, Wc = generate_sigma_points.generate_sigma_points(
+        nsd=nsd, alpha=alpha, beta=beta, kappa=kappa,
+        P_pos=P_pos, P_vel=P_vel, P_mass=P_mass,
+        num_time_steps=num_time_steps, backTspan=backTspan,
+        r_bundles=r_bundles, v_bundles=v_bundles, mass_bundles=mass_bundles
+    )
+
+    # Propagate sigma points
+    trajectories, P_combined_history, means_history, X, y = solve_trajectories.solve_trajectories_with_covariance(
+        backTspan, time_steps_strided, num_time_steps, 1, sigmas_combined,
+        new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc
+    )
+
+    # Save result
+    save_path = f"data_bundle_32_stride_{stride}.pkl"
+    joblib.dump({
+        "X": X,
+        "y": y,
+        "trajectories": trajectories,
+        "P_combined_history": P_combined_history,
+        "means_history": means_history
+    }, save_path)
+
+    print(f"Saved propagated sigma trajectories for stride {stride} to {save_path}")
+
+# === Perform Propgation for Bundle 32 with MC Comparison  === 
+time_stride = 1
+time_steps = np.arange(len(backTspan),step=time_stride)
 tstart_index, tend_index = 0, 1
 tstart, tend = backTspan[tstart_index], backTspan[tend_index]
 time_steps = time_steps[tstart_index:tend_index + 1]
 num_time_steps = len(time_steps)
 
-# === Sigma Point Generation ===
+# === Sigma Point Generation  for Baseline Dataset ===
 nsd = 7
 P_pos = np.eye(3) * 0.01
 P_vel = np.eye(3) * 0.0001
@@ -357,8 +405,16 @@ plt.tight_layout()
 plt.show()
 
 # === Compute Metrics for Sensitivity Analysis ===
-metrics = compute_sensitivity_metrics(sensitivity_df, sigma_idx=0)
-for variant, vals in metrics.items():
-    print(f"{variant.upper()} CONTROL:")
-    print(f"  Max MSE: {vals['max_mse']:.4e} km²")
-    print(f"  Final position deviation: {vals['final_pos_deviation_km']:.6f} km")
+metrics_df = compute_sensitivity_metrics_all_sigmas(sensitivity_df)
+
+for sigma_idx in sorted(metrics_df["sigma_idx"].unique()):
+    print(f"\nSIGMA POINT {sigma_idx}")
+    for variant in ["plus3", "minus3"]:
+        row = metrics_df[(metrics_df["sigma_idx"] == sigma_idx) &
+                         (metrics_df["variant"] == variant)]
+        if not row.empty:
+            max_mse = row["max_mse"].values[0]
+            final_dev = row["final_pos_deviation_km"].values[0]
+            print(f"  {variant.upper()} CONTROL:")
+            print(f"    Max MSE: {max_mse:.4e} km²")
+            print(f"    Final position deviation: {final_dev:.6f} km")
