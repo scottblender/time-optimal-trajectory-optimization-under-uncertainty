@@ -410,11 +410,14 @@ metrics_df = compute_sensitivity_metrics_all_sigmas(sensitivity_df)
 for sigma_idx in sorted(metrics_df["sigma_idx"].unique()):
     print(f"\nSIGMA POINT {sigma_idx}")
     for variant in ["plus3", "minus3"]:
-        row = metrics_df[(metrics_df["sigma_idx"] == sigma_idx) &
-                         (metrics_df["variant"] == variant)]
+        row = metrics_df[
+            (metrics_df["sigma_idx"] == sigma_idx) &
+            (metrics_df["variant"] == variant)
+        ]
         if not row.empty:
-            max_mse = row["max_mse"].values[0]
+            traj_mse = row["trajectory_mse"].values[0]
             final_dev = row["final_pos_deviation_km"].values[0]
             print(f"  {variant.upper()} CONTROL:")
-            print(f"    Max MSE: {max_mse:.4e} km²")
+            print(f"    Trajectory MSE: {traj_mse:.4e} km²")
             print(f"    Final position deviation: {final_dev:.6f} km")
+

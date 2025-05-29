@@ -43,6 +43,15 @@ def evaluate_single_sigma(X_bundle, sigma_idx, y_pred_bundle, y_true_bundle, tra
         mee = X_sigma[i, 1:8]
         ctrl_pred = y_sigma_pred[i]
         ctrl_true = y_sigma_true[i]
+
+        # Print control values before propagation
+        if i == 0:
+            print(f"\n=== Time Stride {stride} | Sigma {sigma_idx} ===")
+            print("Predicted Initial Control (lambda):")
+            print(np.array2string(ctrl_pred, formatter={'float_kind': lambda x: f'{x: .5f}'}))
+            print("Actual Initial Control (lambda):")
+            print(np.array2string(ctrl_true, formatter={'float_kind': lambda x: f'{x: .5f}'}))
+
         S = np.concatenate([mee, ctrl_pred])
         Sf = solve_ivp(lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
                        [t0, t1], S, t_eval=seg_times)
@@ -61,6 +70,13 @@ def evaluate_single_sigma(X_bundle, sigma_idx, y_pred_bundle, y_true_bundle, tra
     v_pred_all = np.vstack(v_pred_all)
     r_pred_interp = r_pred_all[:r_actual.shape[0]]
     v_pred_interp = v_pred_all[:v_actual.shape[0]]
+
+    # 📍 Print final positions
+    print("Final Predicted Position [x y z]:")
+    print(np.array2string(r_pred_interp[-1], formatter={'float_kind': lambda x: f'{x: .5f}'}))
+    print("Final Actual Position [x y z]:")
+    print(np.array2string(r_actual[-1], formatter={'float_kind': lambda x: f'{x: .5f}'}))
+
 
     mse_r = np.mean((r_actual - r_pred_interp) ** 2, axis=0)
     mse_v = np.mean((v_actual - v_pred_interp) ** 2, axis=0)

@@ -3,12 +3,12 @@ import pandas as pd
 
 def compute_sensitivity_metrics_all_sigmas(sensitivity_df):
     """
-    Computes max MSE and final position deviation for each sigma_idx
+    Computes total trajectory MSE and final position deviation for each sigma_idx,
     comparing plus3 and minus3 against the mean trajectory.
     
     Returns:
         DataFrame with columns:
-        ['sigma_idx', 'variant', 'max_mse', 'final_pos_deviation_km']
+        ['sigma_idx', 'variant', 'trajectory_mse', 'final_pos_deviation_km']
     """
     all_metrics = []
 
@@ -32,15 +32,16 @@ def compute_sensitivity_metrics_all_sigmas(sensitivity_df):
             pos_mean = df_mean[["x", "y", "z"]].values
             pos_var = df_var[["x", "y", "z"]].values
 
-            mse_per_step = np.mean((pos_mean - pos_var)**2, axis=1)
-            max_mse = np.max(mse_per_step)
+            # Compute total trajectory MSE across all timesteps
+            trajectory_mse = np.mean(np.linalg.norm(pos_mean - pos_var, axis=1)**2)
 
+            # Final position deviation in km
             final_dev = np.linalg.norm(pos_mean[-1] - pos_var[-1])
 
             all_metrics.append({
                 "sigma_idx": sigma_idx,
                 "variant": variant,
-                "max_mse": max_mse,
+                "trajectory_mse": trajectory_mse,
                 "final_pos_deviation_km": final_dev
             })
 
