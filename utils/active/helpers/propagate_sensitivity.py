@@ -5,101 +5,85 @@ import rv2mee
 import mee2rv
 import odefunc
 
-def propagate_sensitivity_with_evolving_mean(
-    sigmas_combined, y_sorted,
-    backTspan, time_steps, num_time_steps,
-    mu, F, c, m0, g0,
-    lam_std=100
+def propagate_sensitivity_from_initial_lam_only(
+    X_sorted, y_sorted, trajectories, backTspan,
+    stride, lam_std=0.01
 ):
-    forwardTspan = backTspan[::-1]
-    time = [forwardTspan[time_steps[i]] for i in range(num_time_steps)]
+    # === Constants ===
+    mu, F, c, m0, g0 = 27.899633640439433, 0.33, 4.4246246663455135, 4000, 9.81
+    bundle_idx = int(np.unique(X_sorted[:, -2])[0])  # assumes fixed bundle
+    sigma_indices = np.unique(X_sorted[:, -1].astype(int))
+
     results = []
 
-    for j in range(num_time_steps - 1):
-        tstart, tend = time[j], time[j + 1]
-        sub_times = np.linspace(tstart, tend, 11)  # 10 subintervals
-        sigma_combined = sigmas_combined[0, :, :, j]  # bundle 0
+    for sigma_idx in sigma_indices:
+        mask = X_sorted[:, -1] == sigma_idx
+        X_sigma = X_sorted[mask]
+        y_sigma = y_sorted[mask]
+        sort_idx = np.argsort(X_sigma[:, 0])
+        X_sigma = X_sigma[sort_idx]
+        y_sigma = y_sigma[sort_idx]
 
-        for sigma_idx in range(sigma_combined.shape[0]):
-            # Get initial Cartesian state
-            r0 = sigma_combined[sigma_idx, :3]
-            v0 = sigma_combined[sigma_idx, 3:6]
-            mass0 = sigma_combined[sigma_idx, 6]
+        for label in ["mean", "plus3", "minus3"]:
+            r_all, v_all = [], []
 
-            # Look up initial lambda from y_sorted
-            initial_mask = (np.abs(y_sorted[:, 0] - sub_times[0]) < 1e-8) & (y_sorted[:, 16] == sigma_idx)
-            initial_lam_row = y_sorted[initial_mask]
-            if initial_lam_row.shape[0] == 0:
-                raise ValueError(f"No initial control data found for time {sub_times[0]} and sigma {sigma_idx}")
-            lam_mean = initial_lam_row[0, -7:]
+            for i in range(len(X_sigma) - 1):
+                t0, t1 = X_sigma[i, 0], X_sigma[i + 1, 0]
+                seg_times = np.linspace(t0, t1, 5)
+                mee = X_sigma[i, 1:8]
+                lam_original = y_sigma[i]
 
-            # Build initial state in MEE for each branch independently
-            mee = rv2mee.rv2mee(np.array([r0]), np.array([v0]), mu).flatten()
-            state_mean = np.concatenate([mee, [mass0]])
-            state_plus3 = state_mean.copy()
-            state_minus3 = state_mean.copy()
-
-            lam_mean_prev = lam_mean.copy()
-            lam_plus_prev = lam_mean + 3 * lam_std
-            lam_minus_prev = lam_mean - 3 * lam_std
-
-            for k in range(10):
-                t0, t1 = sub_times[k], sub_times[k + 1]
-                t_eval = np.linspace(t0, t1, 20)
-
-                for label in ["mean", "plus3", "minus3"]:
-                    if label == "mean":
-                        state = state_mean.copy()
-                        lam = lam_mean_prev
-                    elif label == "plus3":
-                        state = state_plus3.copy()
-                        lam = lam_plus_prev
+                # Apply ±3σ only at i == 0
+                if i == 0:
+                    if label == "plus3":
+                        lam_used = lam_original + 3 * lam_std
+                    elif label == "minus3":
+                        lam_used = lam_original - 3 * lam_std
                     else:
-                        state = state_minus3.copy()
-                        lam = lam_minus_prev
+                        lam_used = lam_original.copy()
 
-                    state_full = np.concatenate([state, lam])
+                    print(f"SIGMA {sigma_idx} [{label.upper()}] initial λ (t = {t0:.2f}):")
+                    print(np.array2string(lam_used, formatter={'float_kind': lambda x: f"{x:.6f}"}))
+                else:
+                    lam_used = lam_original  # exactly as in the original propagation
 
-                    func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
-                    Sf = scipy.integrate.solve_ivp(func, [t0, t1], state_full, method='RK45',
-                                                   t_eval=t_eval, rtol=1e-6, atol=1e-8)
+                S = np.concatenate([mee, lam_used])
+                Sf = scipy.integrate.solve_ivp(lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
+                                               [t0, t1], S, t_eval=seg_times)
 
-                    if Sf.success:
-                        mee = Sf.y[:6, :].T
-                        mass = Sf.y[6, :].reshape(-1, 1)
-                        r, v = mee2rv.mee2rv(mee[:, 0], mee[:, 1], mee[:, 2],
-                                             mee[:, 3], mee[:, 4], mee[:, 5], mu)
-                        full = np.hstack([r, v, mass])
+                r_xyz, v_xyz = mee2rv.mee2rv(Sf.y.T[:, 0], Sf.y.T[:, 1], Sf.y.T[:, 2],
+                                             Sf.y.T[:, 3], Sf.y.T[:, 4], Sf.y.T[:, 5], mu)
+                r_all.append(r_xyz)
+                v_all.append(v_xyz)
 
-                        for idx in range(full.shape[0]):
-                            results.append([
-                                j, k, sigma_idx, label, Sf.t[idx],
-                                *full[idx],
-                                *lam,
-                                *lam_mean
-                            ])
+            r_all = np.vstack(r_all)
+            v_all = np.vstack(v_all)
+            r_actual = trajectories[0][0][sigma_idx][:, :3]
+            v_actual = trajectories[0][0][sigma_idx][:, 3:6]
 
-                        # Final Cartesian state from this subinterval
-                        r_final = full[-1, :3]
-                        v_final = full[-1, 3:6]
-                        m_final = full[-1, 6]
-                        mee_final = rv2mee.rv2mee(np.array([r_final]), np.array([v_final]), mu).flatten()
+            r_pred_interp = r_all[:r_actual.shape[0]]
+            v_pred_interp = v_all[:v_actual.shape[0]]
 
-                        if label == "mean":
-                            state_mean = np.concatenate([mee_final, [m_final]])
-                            lam_mean_prev = Sf.y[-7:, -1]
-                        elif label == "plus3":
-                            state_plus3 = np.concatenate([mee_final, [m_final]])
-                            lam_plus_prev = Sf.y[-7:, -1]
-                        else:
-                            state_minus3 = np.concatenate([mee_final, [m_final]])
-                            lam_minus_prev = Sf.y[-7:, -1]
+            print("Final Predicted Position:")
+            print(np.array2string(r_pred_interp[-1], formatter={'float_kind': lambda x: f"{x:.6f}"}))
+            print("Final Actual Position:")
+            print(np.array2string(r_actual[-1], formatter={'float_kind': lambda x: f"{x:.6f}"}))
 
-    return pd.DataFrame(results, columns=[
-        "interval", "subinterval", "sigma_idx", "lam_type", "time",
-        "x", "y", "z", "vx", "vy", "vz", "mass",
-        "sampled_lam_0", "sampled_lam_1", "sampled_lam_2", "sampled_lam_3",
-        "sampled_lam_4", "sampled_lam_5", "sampled_lam_6",
-        "mean_lam_0", "mean_lam_1", "mean_lam_2", "mean_lam_3",
-        "mean_lam_4", "mean_lam_5", "mean_lam_6"
-    ])
+            mse_r = np.mean((r_actual - r_pred_interp) ** 2, axis=0)
+            mse_v = np.mean((v_actual - v_pred_interp) ** 2, axis=0)
+            final_dev = np.linalg.norm(r_actual[-1] - r_pred_interp[-1])
+
+            results.append({
+                "sigma": sigma_idx,
+                "label": label,
+                "stride": stride,
+                "x mse": mse_r[0],
+                "y mse": mse_r[1],
+                "z mse": mse_r[2],
+                "vx mse": mse_v[0],
+                "vy mse": mse_v[1],
+                "vz mse": mse_v[2],
+                "final position deviation": final_dev
+            })
+
+    return pd.DataFrame(results)
