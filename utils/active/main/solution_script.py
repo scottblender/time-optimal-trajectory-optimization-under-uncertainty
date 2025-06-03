@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 from propagate_sensitivity import propagate_sensitivity_from_initial_lam_only
-from sensitivity_metrics import compute_sensitivity_metrics_all_sigmas
+from sensitivity_metrics import compute_aggregate_rmsd
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import generate_sigma_points
@@ -368,20 +368,44 @@ sensitivity_df = propagate_sensitivity_from_initial_lam_only(
     lam_std=0.01,
 )
 
-# === Compute and Print Sensitivity Metrics per Sigma ===
-for sigma_idx in sorted(sensitivity_df["sigma"].unique()):
-    print(f"\nSIGMA POINT {sigma_idx}")
-    for variant in ["plus3", "minus3"]:
-        row = sensitivity_df[
-            (sensitivity_df["sigma"] == sigma_idx) &
-            (sensitivity_df["label"] == variant)
-        ]
-        if not row.empty:
-            traj_mse = row["x mse"].values[0] + row["y mse"].values[0] + row["z mse"].values[0]
-            final_dev = row["final position deviation"].values[0]
-            print(f"  {variant.upper()} CONTROL:")
-            print(f"    Trajectory MSE: {traj_mse:.4e} km²")
-            print(f"    Final position deviation: {final_dev:.6f} km")
+# === Plot Sensitivity Trajectories per Sigma ===
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
 
+# Sigma 0 in red
+df = sensitivity_df[(sensitivity_df["sigma_idx"] == 0)].sort_values("time")
+ax.plot(df["x"], df["y"], df["z"], color="red", linewidth=2, label="σ=0")
+ax.scatter(df["x"].values[-1], df["y"].values[-1], df["z"].values[-1], color="red", marker="x", s=60)
 
+# Others in blue
+for sigma in sorted(sensitivity_df["sigma_idx"].unique()):
+    if sigma == 0:
+        continue
+    df = sensitivity_df[sensitivity_df["sigma_idx"] == sigma].sort_values("time")
+    ax.plot(df["x"], df["y"], df["z"], color="blue", alpha=0.3)
+    ax.scatter(df["x"].values[-1], df["y"].values[-1], df["z"].values[-1], color="blue", s=20, marker="o")
 
+ax.set_title("3D Trajectories: σ₀ in Red, Others in Blue")
+ax.set_xlabel("x [km]")
+ax.set_ylabel("y [km]")
+ax.set_zlabel("z [km]")
+plt.tight_layout()
+plt.show()
+
+# === Compute RMSD metrics ===
+aggregate_results = compute_aggregate_rmsd(sensitivity_df)
+
+# === Print nicely ===
+print("\n=== RMSD and Final Position Deviation (Compared to Sigma 0) ===")
+for _, row in aggregate_results.iterrows():
+    lam_type = str(row.get("lam_type", "UNKNOWN")).upper()
+    sigma = int(row.get("sigma_idx", -1))
+    rmsd = row.get("rmsd", np.nan)
+    final_dev = row.get("final_pos_deviation_km", np.nan)
+
+    print(f"[{lam_type}] Sigma {sigma}")
+    if pd.isna(rmsd) or pd.isna(final_dev):
+        print("  Skipped due to missing data.\n")
+    else:
+        print(f"  RMSD (km): {rmsd:.6f}")
+        print(f"  Final Position Deviation (km): {final_dev:.6f}\n")
