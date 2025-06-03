@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 from propagate_sensitivity import propagate_sensitivity_from_initial_lam_only
-from sensitivity_metrics import compute_aggregate_rmsd
+from sensitivity_metrics import compute_aggregate_metrics
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import generate_sigma_points
@@ -187,7 +187,7 @@ for stride in time_strides_to_test:
     print(f"Saved propagated sigma trajectories for stride {stride} to {save_path}")
 
 # === Perform Propgation for Bundle 32 with MC Comparison  === 
-time_stride = 1
+time_stride = 10
 time_steps = np.arange(len(backTspan),step=time_stride)
 tstart_index, tend_index = 0, 1
 tstart, tend = backTspan[tstart_index], backTspan[tend_index]
@@ -392,20 +392,21 @@ ax.set_zlabel("z [km]")
 plt.tight_layout()
 plt.show()
 
-# === Compute RMSD metrics ===
-aggregate_results = compute_aggregate_rmsd(sensitivity_df)
+# === Compute MSE metrics ===
+aggregate_results = compute_aggregate_metrics(sensitivity_df)
 
 # === Print nicely ===
-print("\n=== RMSD and Final Position Deviation (Compared to Sigma 0) ===")
+print("\n=== MSE and Final Position Deviation (Compared to Sigma 0) ===")
 for _, row in aggregate_results.iterrows():
     lam_type = str(row.get("lam_type", "UNKNOWN")).upper()
-    sigma = int(row.get("sigma_idx", -1))
-    rmsd = row.get("rmsd", np.nan)
+    sigma_idx = row.get("sigma_idx", "UNKNOWN")
+    mse = row.get("mse", np.nan)
     final_dev = row.get("final_pos_deviation_km", np.nan)
 
-    print(f"[{lam_type}] Sigma {sigma}")
-    if pd.isna(rmsd) or pd.isna(final_dev):
+    print(f"[{lam_type}] Sigma {sigma_idx}")
+    if pd.isna(mse) or pd.isna(final_dev):
         print("  Skipped due to missing data.\n")
     else:
-        print(f"  RMSD (km): {rmsd:.6f}")
+        print(f"  MSE (km²): {mse:.6f}")
         print(f"  Final Position Deviation (km): {final_dev:.6f}\n")
+

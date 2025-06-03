@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-def compute_aggregate_rmsd(sensitivity_df):
+def compute_aggregate_metrics(sensitivity_df):
     results = []
     pos_columns = ["x", "y", "z"]
 
@@ -11,6 +11,9 @@ def compute_aggregate_rmsd(sensitivity_df):
         # Reference trajectory: sigma 0
         df_ref = df_label[df_label["sigma_idx"] == 0].sort_values("time")[["time"] + pos_columns]
         df_ref = df_ref.rename(columns={col: f"ref_{col}" for col in pos_columns})
+
+        mse_list = []
+        final_dev_list = []
 
         for sigma_idx in df_label["sigma_idx"].unique():
             if sigma_idx == 0:
@@ -28,13 +31,25 @@ def compute_aggregate_rmsd(sensitivity_df):
 
             squared_dists = np.linalg.norm(pos_sigma - pos_ref, axis=1) ** 2
             final_dev = np.linalg.norm(pos_sigma[-1] - pos_ref[-1])
-            rmsd = np.sqrt(np.mean(squared_dists))
+            mse = np.mean(squared_dists)
 
             results.append({
                 "lam_type": label,
                 "sigma_idx": sigma_idx,
-                "rmsd": rmsd,
+                "mse": mse,
                 "final_pos_deviation_km": final_dev
+            })
+
+            mse_list.append(mse)
+            final_dev_list.append(final_dev)
+
+        # Add average over all nonzero sigmas
+        if mse_list:
+            results.append({
+                "lam_type": label,
+                "sigma_idx": "avg",
+                "mse": np.mean(mse_list),
+                "final_pos_deviation_km": np.mean(final_dev_list)
             })
 
     return pd.DataFrame(results)
