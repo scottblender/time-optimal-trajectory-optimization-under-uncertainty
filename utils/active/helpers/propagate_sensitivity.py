@@ -1,6 +1,6 @@
 import numpy as np
-import scipy.integrate
 import pandas as pd
+import scipy.integrate
 import rv2mee
 import mee2rv
 import odefunc
@@ -13,6 +13,14 @@ def propagate_sensitivity_from_initial_lam_only(
     bundle_idx = int(np.unique(X_sorted[:, -2])[0])
     sigma_indices = np.unique(X_sorted[:, -1].astype(int))
 
+    # === Time check ===
+    t_min = X_sorted[:, 0].min()
+    t_max = X_sorted[:, 0].max()
+    print(f"\n=== Propagation Time Span ===")
+    print(f"Start Time: {t_min:.5f}")
+    print(f"End Time:   {t_max:.5f}")
+    print(f"Duration:   {t_max - t_min:.5f} (nondimensional)")
+
     records = []
 
     for sigma_idx in sigma_indices:
@@ -24,24 +32,38 @@ def propagate_sensitivity_from_initial_lam_only(
         y_sigma = y_sigma[sort_idx]
 
         for label in ["mean", "plus3", "minus3"]:
-            # === Fix initial lambda once ===
-            lam_initial = y_sigma[0]
-            if label == "plus3":
-                lam_used = lam_initial + 3 * lam_std
-            elif label == "minus3":
-                lam_used = lam_initial - 3 * lam_std
-            else:
-                lam_used = lam_initial.copy()
+            lam0 = y_sigma[0]
 
-            print(f"SIGMA {sigma_idx} [{label.upper()}] initial λ (t = {X_sigma[0, 0]:.2f}):")
+            if label == "plus3":
+                lam_used = lam0 + 3 * lam_std
+            elif label == "minus3":
+                lam_used = lam0 - 3 * lam_std
+            else:
+                lam_used = lam0.copy()
+
+            # Initial state
+            mee0 = X_sigma[0, 1:8]
+            r0, v0 = mee2rv.mee2rv(
+                np.array([mee0[0]]), np.array([mee0[1]]), np.array([mee0[2]]),
+                np.array([mee0[3]]), np.array([mee0[4]]), np.array([mee0[5]]),
+                mu
+            )
+            print(f"\nSIGMA {sigma_idx} [{label.upper()}] Initial Conditions at t = {X_sigma[0, 0]:.2f}")
+            print("Position [x y z] (km):")
+            print(np.array2string(r0[0], formatter={'float_kind': lambda x: f"{x:.6f}"}))
+            print("Velocity [vx vy vz] (km/s):")
+            print(np.array2string(v0[0], formatter={'float_kind': lambda x: f"{x:.6f}"}))
+            print("Initial λ:")
             print(np.array2string(lam_used, formatter={'float_kind': lambda x: f"{x:.6f}"}))
 
+            # Propagate each segment with same lam_used
             for i in range(len(X_sigma) - 1):
                 t0, t1 = X_sigma[i, 0], X_sigma[i + 1, 0]
                 seg_times = np.linspace(t0, t1, 5)
-                mee = X_sigma[i, 1:8]
 
-                S = np.concatenate([mee, lam_used])
+                state = X_sigma[i, 1:8]  # MEE + mass
+                S = np.concatenate([state, lam_used])
+
                 Sf = scipy.integrate.solve_ivp(
                     lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
                     [t0, t1], S, t_eval=seg_times
@@ -49,13 +71,8 @@ def propagate_sensitivity_from_initial_lam_only(
 
                 mee_matrix = Sf.y.T[:, :6]
                 r_xyz, v_xyz = mee2rv.mee2rv(
-                    mee_matrix[:, 0],  # p
-                    mee_matrix[:, 1],  # f
-                    mee_matrix[:, 2],  # g
-                    mee_matrix[:, 3],  # h
-                    mee_matrix[:, 4],  # k
-                    mee_matrix[:, 5],  # L
-                    mu
+                    mee_matrix[:, 0], mee_matrix[:, 1], mee_matrix[:, 2],
+                    mee_matrix[:, 3], mee_matrix[:, 4], mee_matrix[:, 5], mu
                 )
 
                 for k in range(len(seg_times)):
@@ -68,5 +85,8 @@ def propagate_sensitivity_from_initial_lam_only(
                         "vx": v_xyz[k, 0], "vy": v_xyz[k, 1], "vz": v_xyz[k, 2],
                         **{f"sampled_lam_{j}": lam_k[j] for j in range(7)}
                     })
+
+                # Update lam_used to most recent propagated value
+                lam_used = Sf.y[7:, -1]  # Resample per segment
 
     return pd.DataFrame(records)
