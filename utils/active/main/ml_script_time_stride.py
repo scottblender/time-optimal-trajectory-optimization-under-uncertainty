@@ -40,17 +40,21 @@ def evaluate_single_sigma_against_sigma0(X_bundle, sigma_idx, y_pred_bundle, y_t
         t0, t1 = X_sigma[i, 0], X_sigma[i + 1, 0]
         seg_times = np.linspace(t0, t1, 5)
         mee = X_sigma[i, 1:8]
-        ctrl_pred = y_sigma_pred[0]
-        ctrl_true = y_sigma_true[0]
+
+        ctrl_pred = y_sigma_pred[i]
+        ctrl_true = y_sigma_true[i]
         cosine_dir = cosine_similarity(ctrl_pred, ctrl_true)
+
         if i == 0:
             print(f"\n=== Time Stride {stride} | Sigma {sigma_idx} ===")
-            print("Predicted Initial Control (lambda):")
-            print(np.array2string(ctrl_pred, formatter={'float_kind': lambda x: f'{x: .5f}'}))
-            print("Actual Initial Control (lambda):")
-            print(np.array2string(ctrl_true, formatter={'float_kind': lambda x: f'{x: .5f}'}))
-            print(f"Cosine Similarity (Pred vs. True): {cosine_dir:.6f}")
+        print(f"\nSegment {i}: Time [{t0:.5f}, {t1:.5f}]")
+        print("Predicted Control (lambda):")
+        print(np.array2string(ctrl_pred, formatter={'float_kind': lambda x: f'{x: .5f}'}))
+        print("Actual Control (lambda):")
+        print(np.array2string(ctrl_true, formatter={'float_kind': lambda x: f'{x: .5f}'}))
+        print(f"Cosine Similarity: {cosine_dir:.6f}")
 
+        if i == 0:
             r0_pred, _ = mee2rv.mee2rv(
                 np.array([mee[0]]), np.array([mee[1]]), np.array([mee[2]]),
                 np.array([mee[3]]), np.array([mee[4]]), np.array([mee[5]]), mu
@@ -80,7 +84,7 @@ def evaluate_single_sigma_against_sigma0(X_bundle, sigma_idx, y_pred_bundle, y_t
     r_pred_interp = r_pred_all[:r_ref.shape[0]]
     v_pred_interp = v_pred_all[:v_ref.shape[0]]
 
-    print("Final Predicted Position [x y z]:")
+    print("\nFinal Predicted Position [x y z]:")
     print(np.array2string(r_pred_interp[-1], formatter={'float_kind': lambda x: f'{x: .5f}'}))
     print("Final Sigma-0 Reference Position [x y z]:")
     print(np.array2string(r_ref[-1], formatter={'float_kind': lambda x: f'{x: .5f}'}))
@@ -99,7 +103,7 @@ def evaluate_single_sigma_against_sigma0(X_bundle, sigma_idx, y_pred_bundle, y_t
         "vy mse": mse_v[1],
         "vz mse": mse_v[2],
         "control mse": control_mse,
-        "cosine similarity": cosine_dir,
+        "cosine similarity": cosine_similarity(y_sigma_pred[0], y_sigma_true[0]),  # global similarity
         "final position deviation": final_dev
     }
 
