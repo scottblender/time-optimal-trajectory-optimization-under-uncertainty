@@ -365,7 +365,6 @@ sensitivity_df = propagate_sensitivity_from_initial_lam_only(
     trajectories=trajectories,
     backTspan=backTspan,
     stride=time_stride,
-    lam_std=0.01,
 )
 
 # === Plot Sensitivity Trajectories per Sigma ===

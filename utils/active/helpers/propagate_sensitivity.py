@@ -7,11 +7,14 @@ import odefunc
 
 def propagate_sensitivity_from_initial_lam_only(
     X_sorted, y_sorted, trajectories, backTspan,
-    stride, lam_std=0.01
+    stride
 ):
     mu, F, c, m0, g0 = 27.899633640439433, 0.33, 4.4246246663455135, 4000, 9.81
     bundle_idx = int(np.unique(X_sorted[:, -2])[0])
     sigma_indices = np.unique(X_sorted[:, -1].astype(int))
+
+    # === Empirical std devs ===
+    lam_std_vec = np.array([0.004881, 0.006194, 0.004179, 0.004418, 0.005339, 0.003779, 0.003987])
 
     # === Time check ===
     t_min = X_sorted[:, 0].min()
@@ -35,9 +38,9 @@ def propagate_sensitivity_from_initial_lam_only(
             lam0 = y_sigma[0]
 
             if label == "plus3":
-                lam_used = lam0 + 3 * lam_std
+                lam_used = lam0 + 3 * lam_std_vec
             elif label == "minus3":
-                lam_used = lam0 - 3 * lam_std
+                lam_used = lam0 - 3 * lam_std_vec
             else:
                 lam_used = lam0.copy()
 
@@ -87,6 +90,6 @@ def propagate_sensitivity_from_initial_lam_only(
                     })
 
                 # Update lam_used to most recent propagated value
-                lam_used = Sf.y[7:, -1]  # Resample per segment
+                lam_used = Sf.y[7:, -1]  
 
     return pd.DataFrame(records)
