@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error
 from scipy.integrate import solve_ivp
 from scipy.linalg import eigh
 import sys
@@ -69,17 +69,26 @@ def compare_prediction(data, rf, ax, label):
         global_times = np.linspace(X_sample[0, 0], X_sample[-1, 0], r_actual.shape[0])
 
         r_pred_all = []
+
+        # === Initial control from model ===
+        lam_used = y_sample_pred[0]
+
         for i in range(len(X_sample) - 1):
             t0, t1 = X_sample[i, 0], X_sample[i + 1, 0]
             seg_times = global_times[(global_times >= t0) & (global_times <= t1)]
-            mee = X_sample[i, 1:8]
-            ctrl_pred = y_sample_pred[i]
-            S = np.concatenate([mee, ctrl_pred])
+
+            state = X_sample[i, 1:8]  # mee + mass
+            S = np.concatenate([state, lam_used])
+
             Sf = solve_ivp(lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
                            [t0, t1], S, t_eval=seg_times)
+
             r_xyz, _ = mee2rv.mee2rv(Sf.y.T[:, 0], Sf.y.T[:, 1], Sf.y.T[:, 2],
                                      Sf.y.T[:, 3], Sf.y.T[:, 4], Sf.y.T[:, 5], mu)
             r_pred_all.append(r_xyz)
+
+            # === Update control to final propagated value ===
+            lam_used = Sf.y[7:, -1]
 
         r_pred_all = np.vstack(r_pred_all)
 

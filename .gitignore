@@ -163,3 +163,4 @@ data.pkl
 *.pkl
 control_comparisons.txt
 *.csv
+*.png
