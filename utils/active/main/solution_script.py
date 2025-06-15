@@ -187,7 +187,7 @@ for stride in time_strides_to_test:
     print(f"Saved propagated sigma trajectories for stride {stride} to {save_path}")
 
 # === Perform Propgation for Bundle 32 with MC Comparison  === 
-time_stride = 10
+time_stride = 1
 time_steps = np.arange(len(backTspan),step=time_stride)
 tstart_index, tend_index = 0, 1
 tstart, tend = backTspan[tstart_index], backTspan[tend_index]
@@ -332,6 +332,45 @@ ax.legend(handles, labels, loc='upper left', fontsize=10)
 plt.tight_layout()
 plt.show()
 
+# === Sweep Over 8 Sigma Point Uncertainty Distributions ===
+uncertainty_configs = [
+    {"name": "baseline",         "P_pos": np.eye(3) * 0.01, "P_vel": np.eye(3) * 0.0001, "P_mass": np.array([[0.0001]])},
+    {"name": "high_pos",         "P_pos": np.eye(3) * 0.1,  "P_vel": np.eye(3) * 0.0001, "P_mass": np.array([[0.0001]])},
+    {"name": "high_vel",         "P_pos": np.eye(3) * 0.01, "P_vel": np.eye(3) * 0.001,  "P_mass": np.array([[0.0001]])},
+    {"name": "high_mass",        "P_pos": np.eye(3) * 0.01, "P_vel": np.eye(3) * 0.0001, "P_mass": np.array([[0.01]])},
+    {"name": "high_pos_vel",     "P_pos": np.eye(3) * 0.1,  "P_vel": np.eye(3) * 0.001,  "P_mass": np.array([[0.0001]])},
+    {"name": "high_pos_mass",    "P_pos": np.eye(3) * 0.1,  "P_vel": np.eye(3) * 0.0001, "P_mass": np.array([[0.01]])},
+    {"name": "high_vel_mass",    "P_pos": np.eye(3) * 0.01, "P_vel": np.eye(3) * 0.001,  "P_mass": np.array([[0.01]])},
+    {"name": "high_all",         "P_pos": np.eye(3) * 0.1,  "P_vel": np.eye(3) * 0.001,  "P_mass": np.array([[0.01]])},
+]
+
+print("\n=== Generating Data for Sigma Point Distribution Sweep ===")
+for config in uncertainty_configs:
+    name = config["name"]
+    print(f"\n--- Distribution: {name} ---")
+
+    sigmas_combined, P_combined, _, _, Wm, Wc = generate_sigma_points.generate_sigma_points(
+        nsd=nsd, alpha=alpha, beta=beta, kappa=kappa,
+        P_pos=config["P_pos"], P_vel=config["P_vel"], P_mass=config["P_mass"],
+        num_time_steps=num_time_steps, backTspan=backTspan,
+        r_bundles=r_bundles, v_bundles=v_bundles, mass_bundles=mass_bundles
+    )
+
+    trajectories, P_combined_history, means_history, X, y = solve_trajectories.solve_trajectories_with_covariance(
+        backTspan, time_steps, num_time_steps, 1, sigmas_combined,
+        new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc
+    )
+
+    save_path = f"data_bundle_32_uncertainty_{name}.pkl"
+    joblib.dump({
+        "X": X,
+        "y": y,
+        "trajectories": trajectories,
+        "P_combined_history": P_combined_history,
+        "means_history": means_history
+    }, save_path)
+
+    print(f"Saved to: {save_path}")
 
 # === Save Full Propagated Sigma Point Trajectories as CSV ===
 backTspan_reversed = backTspan[::-1]
