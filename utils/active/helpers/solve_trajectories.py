@@ -12,7 +12,6 @@ def solve_trajectories_with_covariance(
     time = [forwardTspan[time_steps[i]] for i in range(num_time_steps)]
     trajectories = []
 
-    # Storage for all collected training data
     P_combined_history = []
     means_history = []
     state_history = []
@@ -39,7 +38,7 @@ def solve_trajectories_with_covariance(
 
             idx_start = np.where(forwardTspan == tstart)[0][0]
             new_lam = new_lam_bundles[idx_start, :, i]
-            P_lam = np.eye(7) * 0.001  # control sampling covariance
+            P_lam = np.eye(7) * 0.001
 
             full_state_sigma_points = []
             cartesian_sigma_points = []
@@ -61,7 +60,7 @@ def solve_trajectories_with_covariance(
                 full_states = []
                 cartesian_states = []
 
-                prev_lam_mean = new_lam.copy()  # set the initial mean before subintervals
+                prev_lam_mean = new_lam.copy()
 
                 for k in range(num_updates):
                     tsub_start, tsub_end = sub_times[k], sub_times[k + 1]
@@ -71,13 +70,14 @@ def solve_trajectories_with_covariance(
                     else:
                         new_lam_current = sample_within_bounds(prev_lam_mean, P_lam)
 
-                    prev_lam_mean = new_lam_current.copy()  # update for next subinterval
-
+                    prev_lam_mean = new_lam_current.copy()
                     S[-7:] = new_lam_current
+
                     func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
                     tspan = np.linspace(tsub_start, tsub_end, 20)
 
-                    Sf = scipy.integrate.solve_ivp(func, [tsub_start, tsub_end], S, method='RK45', rtol=1e-6, atol=1e-8, t_eval=tspan)
+                    Sf = scipy.integrate.solve_ivp(func, [tsub_start, tsub_end], S, method='RK45',
+                                                   rtol=1e-6, atol=1e-8, t_eval=tspan)
 
                     if Sf.success:
                         full_states.append(Sf.y.T)
@@ -144,4 +144,35 @@ def solve_trajectories_with_covariance(
     X_sorted = X_unique[sort_indices]
     y_sorted = y_unique[sort_indices]
 
+   # === Append sigma 0 from next time step (assume it always exists in sigmas_combined) ===
+    if sigmas_combined.shape[3] > 1:
+        # Extract Cartesian state for sigma 0 at t_{k+1}
+        sigma0_cartesian = sigmas_combined[0, 0, :, 1]  # (x, y, z, vx, vy, vz)
+        r0 = sigma0_cartesian[:3].reshape(1, -1)
+        v0 = sigma0_cartesian[3:6].reshape(1, -1)
+
+        # Use mass from mass_bundles (already indexed by time and bundle)
+        time_idx = time_steps[1]
+        m0 = mass_bundles[time_idx, 0]  # bundle 0
+
+        # Convert to MEE
+        mee_state = rv2mee.rv2mee(r0, v0, mu).flatten()
+        mee_full = np.hstack((mee_state, m0))
+
+        # Retrieve control and time
+        lam_val = new_lam_bundles[time_idx, :, 0]  # bundle 0
+        time_val = forwardTspan[time_idx]
+
+        # Append to X/y
+        X_extra = np.hstack([
+            time_val,
+            mee_full,
+            np.zeros(7),
+            32,
+            0
+        ])
+        y_extra = lam_val
+
+        X_sorted = np.vstack([X_sorted, X_extra])
+        y_sorted = np.vstack([y_sorted, y_extra])
     return np.array(trajectories), np.array(P_combined_history), np.array(means_history), X_sorted, y_sorted

@@ -656,3 +656,62 @@ for i in range(len(time_indices)):
 # plt.tight_layout()
 # plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
 # plt.show()
+
+# === Prepare and Run Sensitivity Analysis ===
+# Combine state and control history from solve_trajectories
+control_dataset = np.hstack((X, y))
+
+# Generate sensitivity trajectories using only initial lam ±3σ
+sensitivity_df = propagate_sensitivity_from_initial_lam_only(
+    X_sorted=X,
+    y_sorted=y,
+    trajectories=trajectories,
+    backTspan=backTspan,
+    stride=time_stride,
+)
+
+# === Plot Sensitivity Trajectories per Sigma ===
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+
+# Sigma 0 in red
+df = sensitivity_df[sensitivity_df["sigma_idx"] == 0].sort_values("time")
+ax.plot(df["x"], df["y"], df["z"], color="red", linewidth=2, label="σ=0")
+ax.scatter(df["x"].values[-1], df["y"].values[-1], df["z"].values[-1], color="red", marker="x", s=60)
+
+# Others in blue
+for sigma in sorted(sensitivity_df["sigma_idx"].unique()):
+    if sigma == 0:
+        continue
+    df = sensitivity_df[sensitivity_df["sigma_idx"] == sigma].sort_values("time")
+    ax.plot(df["x"], df["y"], df["z"], color="blue", alpha=0.3)
+    ax.scatter(df["x"].values[-1], df["y"].values[-1], df["z"].values[-1], color="blue", s=20, marker="o")
+
+ax.set_title("3D Trajectories: σ₀ in Red, Others in Blue")
+ax.set_xlabel("x [km]")
+ax.set_ylabel("y [km]")
+ax.set_zlabel("z [km]")
+plt.tight_layout()
+plt.show()
+
+# === Compute MSE metrics ===
+aggregate_results = compute_aggregate_metrics(sensitivity_df)
+
+# === Print nicely ===
+print("\n=== MSE (x/y/z) and Final Position Deviation Compared to Sigma 0 ===")
+for _, row in aggregate_results.iterrows():
+    lam_type = str(row.get("lam_type", "UNKNOWN")).upper()
+    sigma_idx = row.get("sigma_idx", "UNKNOWN")
+    x_mse = row.get("x mse", np.nan)
+    y_mse = row.get("y mse", np.nan)
+    z_mse = row.get("z mse", np.nan)
+    final_dev = row.get("final position deviation", np.nan)
+
+    print(f"[{lam_type}] Sigma {sigma_idx}")
+    if any(pd.isna(val) for val in [x_mse, y_mse, z_mse, final_dev]):
+        print("  Skipped due to missing data.\n")
+    else:
+        print(f"  x MSE (km²): {x_mse:.6f}")
+        print(f"  y MSE (km²): {y_mse:.6f}")
+        print(f"  z MSE (km²): {z_mse:.6f}")
+        print(f"  Final Position Deviation (km): {final_dev:.6f}\n")

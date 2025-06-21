@@ -41,7 +41,7 @@ def generate_sigma_points(nsd=None, alpha=None, beta=None, kappa=None, P_pos=Non
     ])
     
     # Initialize time steps
-    time_steps = np.linspace(0, len(backTspan) - 1, num_time_steps, dtype=int)
+    time_steps = np.arange(num_time_steps)
     num_points = time_steps.shape[0]
     
     # Initialize the sigma points array

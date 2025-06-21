@@ -6,14 +6,13 @@ import joblib
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
-from propagate_sensitivity import propagate_sensitivity_from_initial_lam_only
-from sensitivity_metrics import compute_aggregate_metrics
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import generate_sigma_points
 import solve_trajectories
 import generate_monte_carlo_trajectories
 from scipy.linalg import eigh
+from scipy.spatial.distance import mahalanobis
 from matplotlib.patches import Patch
 
 def create_initial_csv_for_multiple_bundles(
@@ -134,18 +133,24 @@ plt.tight_layout()
 plt.show()
 
 bundle_index = 32
-S_bundles = S_bundles[::-1, :, bundle_index:bundle_index+1]
-r_bundles = r_bundles[::-1, :, bundle_index:bundle_index+1]
-v_bundles = v_bundles[::-1, :, bundle_index:bundle_index+1]
-new_lam_bundles = new_lam_bundles[::-1, :, bundle_index:bundle_index+1]
-mass_bundles = mass_bundles[::-1, bundle_index:bundle_index+1]
+S_bundles = S_bundles[::-1, :, bundle_index]
+S_bundles = S_bundles[:,:,np.newaxis]
+r_bundles = r_bundles[::-1, :, bundle_index]
+r_bundles = r_bundles[:, :, np.newaxis]
+v_bundles = v_bundles[::-1, :, bundle_index]
+v_bundles = v_bundles[:, :, np.newaxis]
+new_lam_bundles = new_lam_bundles[::-1, :, bundle_index]
+new_lam_bundles = new_lam_bundles[:, :, np.newaxis]
+mass_bundles = mass_bundles[::-1, bundle_index]
+mass_bundles = mass_bundles[:, np.newaxis]
 
 # === Sigma Point Generation for Different Time Strides ===
 nsd = 7
 P_pos = np.eye(3) * 0.01
 P_vel = np.eye(3) * 0.0001
 P_mass = np.array([[0.0001]])
-alpha, beta, kappa = 1.7215, 2, float((3 - nsd))
+beta, kappa = 2, float((3 - nsd))
+alpha = np.sqrt(9 / (nsd + kappa))
 
 # === Generate Data for Different Time Strides  ===
 time_strides_to_test = [1, 2, 5, 10]  # Define the time strides you want to evaluate
@@ -199,7 +204,8 @@ nsd = 7
 P_pos = np.eye(3) * 0.01
 P_vel = np.eye(3) * 0.0001
 P_mass = np.array([[0.0001]])
-alpha, beta, kappa = 1.7215, 2, float((3 - nsd))
+beta, kappa = 2, float((3 - nsd))
+alpha = np.sqrt(9 / (nsd + kappa))
 
 sigmas_combined, P_combined, _, _, Wm, Wc = generate_sigma_points.generate_sigma_points(
     nsd=nsd, alpha=alpha, beta=beta, kappa=kappa,
@@ -392,62 +398,40 @@ expected_df = pd.DataFrame(expected_data, columns=[
 ])
 expected_df.to_csv("expected_trajectories_bundle_32.csv", index=False)
 
+# === Print all sigma point positions from X at t_{k+1} ===
+# Assumes propagated data is in Cartesian coordinates in X[:, 1:4]
+# Assumes sigma indices 0–14, and bundle index 32
 
-# === Prepare and Run Sensitivity Analysis ===
-# Combine state and control history from solve_trajectories
-control_dataset = np.hstack((X, y))
+# === Extract t_{k+1} ===
+t_k1 = X[:, 0].max()
 
-# Generate sensitivity trajectories using only initial lam ±3σ
-sensitivity_df = propagate_sensitivity_from_initial_lam_only(
-    X_sorted=X,
-    y_sorted=y,
-    trajectories=trajectories,
-    backTspan=backTspan,
-    stride=time_stride,
-)
+# === Identify all propagated sigma points at t_{k+1} for bundle 32 ===
+mask_k1 = (X[:, 0] == t_k1) & (X[:, -2] == 32)
+X_k1 = X[mask_k1]
 
-# === Plot Sensitivity Trajectories per Sigma ===
-fig = plt.figure(figsize=(10, 8))
-ax = fig.add_subplot(111, projection='3d')
+# === Extract the manually appended sigma 0 row (with placeholder covariance = 0s) ===
+mask_appended_sigma0 = (X_k1[:, -1] == 0) & np.all(X_k1[:, 8:15] == 0, axis=1)
+if np.sum(mask_appended_sigma0) != 1:
+    print("Error: Could not uniquely identify appended sigma 0 reference row.")
+else:
+    ref_row = X_k1[mask_appended_sigma0][0]
+    ref_pos = ref_row[1:4]
 
-# Sigma 0 in red
-df = sensitivity_df[sensitivity_df["sigma_idx"] == 0].sort_values("time")
-ax.plot(df["x"], df["y"], df["z"], color="red", linewidth=2, label="σ=0")
-ax.scatter(df["x"].values[-1], df["y"].values[-1], df["z"].values[-1], color="red", marker="x", s=60)
+    print(f"\n=== Comparing Propagated Sigma Points to Appended Sigma 0 at t = {t_k1:.6f} ===")
+    print(f"Sigma  0 (reference): position = {ref_pos}")
 
-# Others in blue
-for sigma in sorted(sensitivity_df["sigma_idx"].unique()):
-    if sigma == 0:
-        continue
-    df = sensitivity_df[sensitivity_df["sigma_idx"] == sigma].sort_values("time")
-    ax.plot(df["x"], df["y"], df["z"], color="blue", alpha=0.3)
-    ax.scatter(df["x"].values[-1], df["y"].values[-1], df["z"].values[-1], color="blue", s=20, marker="o")
+    for sigma_idx in range(15):
+        row = X_k1[(X_k1[:, -1] == sigma_idx) & ~mask_appended_sigma0]
+        if len(row) == 1:
+            pos = row[0, 1:4]
+            delta = np.linalg.norm(pos - ref_pos)
+            print(f"Sigma {sigma_idx:2d}: position = {pos}, Δ = {delta:.6e}")
+        else:
+            print(f"Sigma {sigma_idx:2d}: [not found or multiple entries]")
 
-ax.set_title("3D Trajectories: σ₀ in Red, Others in Blue")
-ax.set_xlabel("x [km]")
-ax.set_ylabel("y [km]")
-ax.set_zlabel("z [km]")
-plt.tight_layout()
-plt.show()
 
-# === Compute MSE metrics ===
-aggregate_results = compute_aggregate_metrics(sensitivity_df)
 
-# === Print nicely ===
-print("\n=== MSE (x/y/z) and Final Position Deviation Compared to Sigma 0 ===")
-for _, row in aggregate_results.iterrows():
-    lam_type = str(row.get("lam_type", "UNKNOWN")).upper()
-    sigma_idx = row.get("sigma_idx", "UNKNOWN")
-    x_mse = row.get("x mse", np.nan)
-    y_mse = row.get("y mse", np.nan)
-    z_mse = row.get("z mse", np.nan)
-    final_dev = row.get("final position deviation", np.nan)
-
-    print(f"[{lam_type}] Sigma {sigma_idx}")
-    if any(pd.isna(val) for val in [x_mse, y_mse, z_mse, final_dev]):
-        print("  Skipped due to missing data.\n")
-    else:
-        print(f"  x MSE (km²): {x_mse:.6f}")
-        print(f"  y MSE (km²): {y_mse:.6f}")
-        print(f"  z MSE (km²): {z_mse:.6f}")
-        print(f"  Final Position Deviation (km): {final_dev:.6f}\n")
+print("\n=== Sigma Points for Bundle 32 at Initial Time ===")
+for sigma_idx in range(15):
+    pos = sigmas_combined[0,sigma_idx, :3, 0]  # x, y, z at t₀
+    print(f"Sigma {sigma_idx:2d}: position = {pos}")
