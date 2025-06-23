@@ -3,80 +3,47 @@ import glob
 import joblib
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from scipy.integrate import solve_ivp
-import sys
+from scipy.spatial.distance import mahalanobis
+from numpy.linalg import inv
 
-# === Path Setup ===
+import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 import mee2rv
 import odefunc
 
-# === Constants ===
+# Constants
 mu, F, c, m0, g0 = 27.899633640439433, 0.33, 4.4246246663455135, 4000, 9.81
 bundle_idx = 32
 
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12)
 
-def final_position_deviation(r_pred_final, X_bundle):
-    X_sigma0 = X_bundle[X_bundle[:, -1] == 0]
-    times = np.sort(X_sigma0[:, 0])
-    next_time = times[-1]
-    next_row = X_sigma0[X_sigma0[:, 0] == next_time][0]
-    r_sigma0_next = next_row[1:4]
-    return np.linalg.norm(r_pred_final - r_sigma0_next)
-
-def propagate_sigma0_truth(X_bundle, y_bundle):
-    mask = X_bundle[:, -1] == 0
-    X_sigma = X_bundle[mask]
-    y_sigma = y_bundle[mask]
-    sort_idx = np.argsort(X_sigma[:, 0])
-    X_sigma = X_sigma[sort_idx]
-    y_sigma = y_sigma[sort_idx]
-
-    r_true_all, v_true_all = [], []
-    for i in range(len(X_sigma) - 1):
-        t0, t1 = X_sigma[i, 0], X_sigma[i + 1, 0]
-        seg_times = np.linspace(t0, t1, 5)
-        state = X_sigma[i, 1:8]
-        lam_used = y_sigma[i]
-        S = np.concatenate([state, lam_used])
-        Sf = solve_ivp(lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
-                       [t0, t1], S, t_eval=seg_times)
-        r_xyz, v_xyz = mee2rv.mee2rv(*Sf.y.T[:, :6].T, mu)
-        r_true_all.append(r_xyz)
-        v_true_all.append(v_xyz)
-
-    return np.vstack(r_true_all), np.vstack(v_true_all)
-
-def monte_carlo_validation(X_init, control_profile, time_segments, num_samples=100, state_std=1e-4):
-    r_mc_all = []
-
+def monte_carlo_propagation(state_init, control_profile, segments, num_samples=10, std=1e-5):
+    r_hist, v_hist = [], []
     for _ in range(num_samples):
-        perturbed_state = X_init.copy()
-        perturbed_state[:6] += np.random.normal(0, state_std, size=6)
-        r_mc = []
+        state = state_init.copy()
+        state[:6] += np.random.normal(0, std, size=6)
+        r_traj, v_traj = [], []
 
-        for i, (t0, t1) in enumerate(time_segments):
-            lam_used = control_profile[i]
-            S_mc = np.concatenate([perturbed_state, lam_used])
-            seg_times = np.linspace(t0, t1, 5)
+        for i, (t0, t1) in enumerate(segments):
+            lam = control_profile[i]
+            S = np.concatenate([state, lam])
+            t_eval = np.linspace(t0, t1, 20)
             Sf = solve_ivp(lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
-                           [t0, t1], S_mc, t_eval=seg_times)
-            r_xyz, _ = mee2rv.mee2rv(*Sf.y.T[:, :6].T, mu)
-            r_mc.append(r_xyz)
-            perturbed_state = Sf.y[:7, -1]
+                           [t0, t1], S, t_eval=t_eval)
+            r, v = mee2rv.mee2rv(*Sf.y[:6], mu)
+            r_traj.append(r)
+            v_traj.append(v)
+            state = Sf.y[:7, -1]
+        r_hist.append(np.vstack(r_traj))
+        v_hist.append(np.vstack(v_traj))
+    return np.array(r_hist), np.array(v_hist)
 
-        r_mc_all.append(np.vstack(r_mc))
-
-    return np.array(r_mc_all)
-
-def evaluate_per_sigma_point(X, y, stride):
+def evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc):
     X_train, X_test, y_train, y_test = train_test_split(X[:, :-2], y, test_size=0.2, random_state=42)
     rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
     rf.fit(X_train, y_train)
@@ -85,164 +52,116 @@ def evaluate_per_sigma_point(X, y, stride):
     X_bundle = X[X[:, -2] == bundle_idx]
     y_bundle = y[X[:, -2] == bundle_idx]
     y_pred_bundle = rf.predict(X_bundle[:, :-2])
-    r_ref, v_ref = propagate_sigma0_truth(X_bundle, y_bundle)
+    time_vals = np.unique(X_bundle[:, 0])
+    segments = list(zip(time_vals[:-1], time_vals[1:]))
 
-    sigma_mask = X_bundle[:, -1] != 0
-    X_filtered = X_bundle[sigma_mask]
-    y_pred_filtered = y_pred_bundle[sigma_mask]
-    y_true_filtered = y_bundle[sigma_mask]
+    r_pred_stack, control_profile, init_state = [], [], None
+    v_pred_all = []
 
-    time_indices = np.unique(X_filtered[:, 0])
-    time_indices.sort()
-    num_segments = len(time_indices) - 1
+    sigma_indices = np.unique(X_bundle[:, -1]).astype(int)
+    sigma_indices.sort()
 
-    r_pred_all, control_errors, mc_control_profile = [], [], []
-    initial_state = None
+    for sigma_idx in sigma_indices:
+        r_sigma, v_sigma = [], []
+        for i, (t0, t1) in enumerate(segments):
+            row = X_bundle[(X_bundle[:, 0] == t0) & (X_bundle[:, -1] == sigma_idx)][0]
+            lam = y_pred_bundle[(X_bundle[:, 0] == t0) & (X_bundle[:, -1] == sigma_idx)][0]
+            S = np.concatenate([row[1:8], lam])
+            t_eval = np.linspace(t0, t1, 20)
+            Sf = solve_ivp(lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
+                           [t0, t1], S, t_eval=t_eval)
+            r, v = mee2rv.mee2rv(*Sf.y[:6], mu)
+            r_sigma.append(r)
+            v_sigma.append(v)
+            if i == 0 and sigma_idx == 0:
+                init_state = row[1:8]
+            if sigma_idx == 0:
+                control_profile.append(lam)
+        r_pred_stack.append(np.vstack(r_sigma))
+        if sigma_idx == 0:
+            v_pred_all = np.vstack(v_sigma)
 
-    for i in range(num_segments):
-        t0, t1 = time_indices[i], time_indices[i + 1]
-        segment_mask = (X_filtered[:, 0] == t0)
-        state = X_filtered[segment_mask][0, 1:8]
-        lam_pred = y_pred_filtered[segment_mask][0]
-        lam_true = y_true_filtered[segment_mask][0]
-        control_errors.append(np.mean((lam_pred - lam_true) ** 2))
-        mc_control_profile.append(lam_pred)
+    r_pred_stack = np.array(r_pred_stack)  # (15, T, 3)
+    r_pred_all = r_pred_stack[0]
 
-        S = np.concatenate([state, lam_pred])
-        seg_times = np.linspace(t0, t1, 5)
-        Sf = solve_ivp(lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
-                       [t0, t1], S, t_eval=seg_times)
-        r_xyz, _ = mee2rv.mee2rv(*Sf.y.T[:, :6].T, mu)
-        r_pred_all.append(r_xyz)
-        if i == 0:
-            initial_state = state
+    mean_pred = np.sum(Wm[:, None, None] * r_pred_stack, axis=0)
+    deviations = r_pred_stack - mean_pred[None, :, :]
+    P_full = np.einsum("i,ijk,ijl->jkl", Wc, deviations, deviations)
+    P_diag = np.array([np.diag(np.diag(P)) for P in P_full])
+    inv_cov = inv(P_diag[-1])
 
-    r_pred_all = np.vstack(r_pred_all)
+    r_mc, v_mc = monte_carlo_propagation(init_state, control_profile, segments)
+    r_mc_final = r_mc[:, -1, :]
+    r_mc_mean_final = np.mean(r_mc_final, axis=0)
 
-    # Monte Carlo propagation
-    time_segments = list(zip(time_indices[:-1], time_indices[1:]))
-    r_mc_pred = monte_carlo_validation(initial_state, mc_control_profile, time_segments)
-    r_mc_mean = np.mean(r_mc_pred, axis=0)
+    final_time = time_vals[-1]
+    sigma0_rows = X_bundle[(X_bundle[:, 0] == final_time) & (X_bundle[:, -1] == 0)]
+    appended = next((row for row in sigma0_rows if np.allclose(row[8:15], 0)), None)
+    if appended is None:
+        raise ValueError(f"Appended sigma 0 not found at t = {final_time:.6f}")
 
-    # === SolveTrajectories-style covariance comparison at final time step ===
-    N = r_mc_pred.shape[0]
-    W = np.ones(N) / N
-    r_mc_final = r_mc_pred[:, -1, :]  # shape (N, 3)
+    r_ref, v_ref = mee2rv.mee2rv(*appended[1:7].reshape(6, 1), mu)
+    r_ref = r_ref.flatten()
+    v_ref = v_ref.flatten()
 
-    # Align r_pred_all with MC (e.g. last N points or repeat final)
-    r_pred_final = np.repeat(r_pred_all[-1][None, :], N, axis=0)
+    mahalanobis_pred = mahalanobis(r_pred_all[-1], r_ref, inv_cov)
+    mahalanobis_mc_mean = mahalanobis(r_mc_mean_final, r_ref, inv_cov)
 
-    mean_mc = np.average(r_mc_final, axis=0, weights=W)
-    mean_pred = np.average(r_pred_final, axis=0, weights=W)
-    dev_mc = r_mc_final - mean_mc
-    dev_pred = r_pred_final - mean_pred
+    lam_pred_0 = control_profile[0]
+    lam_true_0 = y_bundle[(X_bundle[:, 0] == time_vals[0]) & (X_bundle[:, -1] == 0)][0]
+    cos_sim = cosine_similarity(lam_pred_0, lam_true_0)
 
-    cov_mc = sum(W[i] * np.outer(dev_mc[i], dev_mc[i]) for i in range(N))
-    cov_pred = sum(W[i] * np.outer(dev_pred[i], dev_pred[i]) for i in range(N))
-    trace_diff = np.trace(np.abs(cov_mc - cov_pred))
+    r_mc_mean_full = np.mean(r_mc, axis=0)
+    mc_vs_pred_mse = np.mean((r_pred_all - r_mc_mean_full) ** 2)
 
-    avg_traj_dev = np.mean(np.linalg.norm(r_pred_all - r_mc_mean, axis=1))
-    final_dev = final_position_deviation(r_pred_all[-1], X_bundle)
+    control_true = []
+    for t0 in time_vals[:-1]:
+        lam_true = y_bundle[(X_bundle[:, 0] == t0) & (X_bundle[:, -1] == 0)][0]
+        control_true.append(lam_true)
+    control_true = np.array(control_true)
+    control_mse = mean_squared_error(np.array(control_profile), control_true)
 
-    return [{
-        "sigma": "ALL",
+    metrics = {
         "time stride": stride,
         "model mse": mean_squared_error(y_test, rf.predict(X_test)),
-        "control mse (initial)": np.mean(control_errors),
-        "control mse (full profile)": np.mean((y_pred_filtered - y_true_filtered) ** 2),
-        "cosine similarity": cosine_similarity(y_pred_filtered[0], y_true_filtered[0]),
-        "mc mean deviation (pred vs true control)": 0.0,
-        "avg deviation from MC mean": avg_traj_dev,
-        "avg 3sigma envelope": 3 * np.mean(np.std(r_mc_pred, axis=0)),
-        "x mse": np.mean((r_ref[:len(r_pred_all), 0] - r_pred_all[:, 0]) ** 2),
-        "y mse": np.mean((r_ref[:len(r_pred_all), 1] - r_pred_all[:, 1]) ** 2),
-        "z mse": np.mean((r_ref[:len(r_pred_all), 2] - r_pred_all[:, 2]) ** 2),
-        "vx mse": np.mean((v_ref[:len(r_pred_all), 0]) ** 2),  # placeholder
-        "vy mse": np.mean((v_ref[:len(r_pred_all), 1]) ** 2),
-        "vz mse": np.mean((v_ref[:len(r_pred_all), 2]) ** 2),
-        "final position deviation": final_dev,
-        "mc trace diff": trace_diff
-    }], rf
+        "cosine similarity": cos_sim,
+        "final position deviation": np.linalg.norm(r_pred_all[-1] - r_ref),
+        "mahalanobis_pred": mahalanobis_pred,
+        "mahalanobis_mc_mean": mahalanobis_mc_mean,
+        "trace diff (cov)": np.trace(np.abs(P_diag[-1] - np.diag(np.diag(np.outer(r_pred_all[-1] - mean_pred[-1], r_pred_all[-1] - mean_pred[-1]))))),
+        "mc vs predicted trajectory mse": mc_vs_pred_mse,
+        "control MSE": control_mse,
+        "x mse": np.mean((r_ref[0] - r_pred_all[:, 0]) ** 2),
+        "y mse": np.mean((r_ref[1] - r_pred_all[:, 1]) ** 2),
+        "z mse": np.mean((r_ref[2] - r_pred_all[:, 2]) ** 2),
+        "vx mse": np.mean((v_ref[0] - v_pred_all[:, 0]) ** 2),
+        "vy mse": np.mean((v_ref[1] - v_pred_all[:, 1]) ** 2),
+        "vz mse": np.mean((v_ref[2] - v_pred_all[:, 2]) ** 2),
+    }
 
-def plot_predicted_vs_actual_trajectories(X_bundle, y_bundle, y_pred_bundle, stride):
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
+    count_gt3 = 0
+    for i in range(r_pred_stack.shape[0]):
+        dist = mahalanobis(r_pred_stack[i, -1], r_ref, inv_cov)
+        metrics[f"mahalanobis_sigma_{i}"] = dist
+        if dist > 3.0:
+            count_gt3 += 1
+    metrics["mahalanobis_count_gt3"] = count_gt3
 
-    sigma_indices = sorted(np.unique(X_bundle[:, -1]).astype(int))
-    for sigma in sigma_indices:
-        if sigma == 0:
-            continue
+    return metrics
 
-        mask = X_bundle[:, -1] == sigma
-        X_sigma = X_bundle[mask]
-        y_sigma_pred = y_pred_bundle[mask]
-        y_sigma_true = y_bundle[mask]
-
-        sort_idx = np.argsort(X_sigma[:, 0])
-        X_sigma = X_sigma[sort_idx]
-        y_sigma_pred = y_sigma_pred[sort_idx]
-        y_sigma_true = y_sigma_true[sort_idx]
-
-        r_pred_all = []
-        r_true_all = []
-
-        for i in range(len(X_sigma) - 1):
-            t0, t1 = X_sigma[i, 0], X_sigma[i + 1, 0]
-            seg_times = np.linspace(t0, t1, 5)
-
-            # Predicted
-            state_pred = X_sigma[i, 1:8]
-            lam_pred = y_sigma_pred[i]
-            S_pred = np.concatenate([state_pred, lam_pred])
-            Sf_pred = solve_ivp(lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
-                                [t0, t1], S_pred, t_eval=seg_times)
-            r_pred, _ = mee2rv.mee2rv(*Sf_pred.y.T[:, :6].T, mu)
-            r_pred_all.append(r_pred)
-
-            # True
-            state_true = X_sigma[i, 1:8]
-            lam_true = y_sigma_true[i]
-            S_true = np.concatenate([state_true, lam_true])
-            Sf_true = solve_ivp(lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0),
-                                [t0, t1], S_true, t_eval=seg_times)
-            r_true, _ = mee2rv.mee2rv(*Sf_true.y.T[:, :6].T, mu)
-            r_true_all.append(r_true)
-
-        r_pred_all = np.vstack(r_pred_all)
-        r_true_all = np.vstack(r_true_all)
-
-        ax.plot(r_true_all[:, 0], r_true_all[:, 1], r_true_all[:, 2], label=f"True σ={sigma}", linestyle='--')
-        ax.plot(r_pred_all[:, 0], r_pred_all[:, 1], r_pred_all[:, 2], label=f"Pred σ={sigma}", linestyle='-', alpha=0.5)
-
-    ax.set_title(f"Predicted vs. True Trajectories (Stride = {stride})")
-    ax.set_xlabel("X [km]")
-    ax.set_ylabel("Y [km]")
-    ax.set_zlabel("Z [km]")
-    ax.legend()
-    ax.view_init(elev=25, azim=135)
-    plt.tight_layout()
-    plt.savefig(f"trajectory_comparison_stride_{stride}.png", dpi=300)
-    plt.show()
-
-# === Main Loop ===
+# === Main Execution ===
 results = []
-stride_files = sorted(glob.glob("data_bundle_32_stride_*.pkl"))
+W_bundle = joblib.load("sweep_stride_1_config_baseline_data.pkl")
+Wm, Wc = W_bundle["Wm"], W_bundle["Wc"]
 
+stride_files = sorted(glob.glob("sweep_stride_*_config_baseline_data.pkl"))
 for file in stride_files:
-    stride = int(file.split("_stride_")[1].split(".")[0])
+    stride = int(file.split("_")[2])
     data = joblib.load(file)
-    metrics, rf = evaluate_per_sigma_point(data['X'], data['y'], stride)
-    results.extend(metrics)
-    plot_predicted_vs_actual_trajectories(data['X'], data['y'], rf.predict(data['X'][:, :-2]), stride)
+    X, y = data["X"], data["y"]
+    metrics = evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc)
+    results.append(metrics)
 
 df = pd.DataFrame(results)
-df = df[[ 
-    "time stride", "sigma", "model mse",
-    "control mse (initial)", "control mse (full profile)",
-    "cosine similarity", "avg deviation from MC mean", "avg 3sigma envelope",
-    "x mse", "y mse", "z mse", "vx mse", "vy mse", "vz mse",
-    "final position deviation", "mc trace diff"
-]]
-df.sort_values(by=["time stride"], inplace=True)
-df.to_csv("per_sigma_metrics_vs_stride.csv", index=False)
-print("Saved: per_sigma_metrics_vs_stride.csv")
+df.to_csv("ml_stride_sigma0_aligned_metrics.csv", index=False)
+print("Saved: ml_stride_sigma0_aligned_metrics.csv")

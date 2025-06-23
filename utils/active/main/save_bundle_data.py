@@ -2,7 +2,8 @@ import joblib
 import os
 import sys
 import numpy as np
-import pandas as pd
+import csv
+from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 import compute_nominal_trajectory_params
@@ -13,7 +14,7 @@ mu_s = 132712 * 10**6 * 1e9
 p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
 
 num_bundles = 100
-time_resolution_minutes = 20
+time_resolution_minutes = 10
 
 r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan = compute_bundle_trajectory_params.compute_bundle_trajectory_params(
     p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU, num_bundles, time_resolution_minutes
@@ -35,30 +36,57 @@ data = {
 joblib.dump(data, "bundle_data.pkl")
 print("Saved nominal bundle data to bundle_data.pkl")
 
-# === Export initial_bundles_all.csv ===
-backTspan_reversed = backTspan[::-1]
-combined_data = []
+# === Efficiently Stream Rows to CSV ===
+def stream_initial_csv_for_multiple_bundles(
+    backTspan, r_bundles, v_bundles, mass_bundles, new_lam_bundles,
+    bundle_indices, output_filename="initial_bundles_all.csv"
+):
+    backTspan_rev = backTspan[::-1]
+    r_bundles_rev = r_bundles[::-1]
+    v_bundles_rev = v_bundles[::-1]
+    m_bundles_rev = mass_bundles[::-1]
+    lam_bundles_rev = new_lam_bundles[::-1]
 
-for bundle_index in range(num_bundles - 25):  # match original logic
-    bundle_r = r_bundles[::-1, :, bundle_index]
-    bundle_v = v_bundles[::-1, :, bundle_index]
-    bundle_m = mass_bundles[::-1, bundle_index]
-    bundle_lam = new_lam_bundles[::-1, :, bundle_index]
+    header = [
+        "time", "x", "y", "z", "vx", "vy", "vz", "mass",
+        "lam0", "lam1", "lam2", "lam3", "lam4", "lam5", "lam6",
+        "bundle_index"
+    ]
 
-    for t_idx in range(len(backTspan_reversed)):
-        row = [
-            backTspan_reversed[t_idx],
-            *bundle_r[t_idx], *bundle_v[t_idx],
-            bundle_m[t_idx],
-            *bundle_lam[t_idx],
-            bundle_index
-        ]
-        combined_data.append(row)
+    total_rows = len(backTspan_rev) * len(bundle_indices)
 
-df = pd.DataFrame(combined_data, columns=[
-    "time", "x", "y", "z", "vx", "vy", "vz", "mass",
-    "lam0", "lam1", "lam2", "lam3", "lam4", "lam5", "lam6",
-    "bundle_index"
-])
-df.to_csv("initial_bundles_all.csv", index=False)
-print("Saved initial bundle states to initial_bundles_all.csv")
+    with open(output_filename, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+
+        progress = tqdm(total=total_rows, desc="Writing CSV")
+        for bundle_index in bundle_indices:
+            r_b = r_bundles_rev[:, :, bundle_index]
+            v_b = v_bundles_rev[:, :, bundle_index]
+            m_b = m_bundles_rev[:, bundle_index]
+            lam_b = lam_bundles_rev[:, :, bundle_index]
+
+            for t_idx in range(len(backTspan_rev)):
+                row = [
+                    backTspan_rev[t_idx],
+                    *r_b[t_idx], *v_b[t_idx],
+                    m_b[t_idx],
+                    *lam_b[t_idx],
+                    bundle_index
+                ]
+                writer.writerow(row)
+                progress.update(1)
+        progress.close()
+
+    print(f"Saved initial bundle states to {output_filename}")
+
+# === Call CSV Stream Writer ===
+stream_initial_csv_for_multiple_bundles(
+    backTspan=backTspan,
+    r_bundles=r_bundles,
+    v_bundles=v_bundles,
+    mass_bundles=mass_bundles,
+    new_lam_bundles=new_lam_bundles,
+    bundle_indices=list(range(num_bundles - 25)),
+    output_filename="initial_bundles_all.csv"
+)
