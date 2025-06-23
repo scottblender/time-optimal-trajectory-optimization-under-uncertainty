@@ -13,20 +13,51 @@ from numpy.linalg import inv
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 import mee2rv
+import rv2mee
 import odefunc
 
-# Constants
 mu, F, c, m0, g0 = 27.899633640439433, 0.33, 4.4246246663455135, 4000, 9.81
 bundle_idx = 32
+
+P_pos = np.eye(3) * 0.01
+P_vel = np.eye(3) * 0.0001
+P_mass = np.array([[0.0001]])
+P_init = np.block([
+    [P_pos, np.zeros((3, 3)), np.zeros((3, 1))],
+    [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
+    [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
+])
 
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12)
 
-def monte_carlo_propagation(state_init, control_profile, segments, num_samples=10, std=1e-5):
+def monte_carlo_propagation(init_state_mee, control_profile, segments, num_samples=100):
+    # Convert init state to ECI
+    r0_eci, v0_eci = mee2rv.mee2rv(*[np.array([val]) for val in init_state_mee[:6]], mu)
+    m0_val = init_state_mee[6]
+
+    # Define ECI covariance
+    P_pos = np.eye(3) * 0.01
+    P_vel = np.eye(3) * 0.0001
+    P_mass = np.array([[0.0001]])
+    P_init = np.block([
+        [P_pos, np.zeros((3, 3)), np.zeros((3, 1))],
+        [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
+        [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
+    ])
+
+    mean_eci = np.hstack([r0_eci.flatten(), v0_eci.flatten(), m0_val])
+    samples_eci = np.random.multivariate_normal(mean_eci, P_init, size=num_samples)
+
     r_hist, v_hist = [], []
-    for _ in range(num_samples):
-        state = state_init.copy()
-        state[:6] += np.random.normal(0, std, size=6)
+    for sample in samples_eci:
+        r_sample, v_sample = sample[:3], sample[3:6]
+        m_sample = sample[6]
+        r_sample = r_sample.reshape(1, 3)
+        v_sample = v_sample.reshape(1, 3)
+        state_mee = np.hstack([rv2mee.rv2mee(r_sample, v_sample, mu), m_sample])
+
+        state = state_mee.copy()
         r_traj, v_traj = [], []
 
         for i, (t0, t1) in enumerate(segments):
@@ -55,11 +86,10 @@ def evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc):
     time_vals = np.unique(X_bundle[:, 0])
     segments = list(zip(time_vals[:-1], time_vals[1:]))
 
-    r_pred_stack, control_profile, init_state = [], [], None
-    v_pred_all = []
-
+    r_pred_stack, v_pred_stack = [], []
+    control_profile = []
+    init_state = None
     sigma_indices = np.unique(X_bundle[:, -1]).astype(int)
-    sigma_indices.sort()
 
     for sigma_idx in sigma_indices:
         r_sigma, v_sigma = [], []
@@ -73,53 +103,67 @@ def evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc):
             r, v = mee2rv.mee2rv(*Sf.y[:6], mu)
             r_sigma.append(r)
             v_sigma.append(v)
-            if i == 0 and sigma_idx == 0:
+            if sigma_idx == 0 and i == 0:
                 init_state = row[1:8]
             if sigma_idx == 0:
                 control_profile.append(lam)
         r_pred_stack.append(np.vstack(r_sigma))
-        if sigma_idx == 0:
-            v_pred_all = np.vstack(v_sigma)
+        v_pred_stack.append(np.vstack(v_sigma))
 
-    r_pred_stack = np.array(r_pred_stack)  # (15, T, 3)
+    r_pred_stack = np.array(r_pred_stack)
+    v_pred_stack = np.array(v_pred_stack)
+
+    mean_r = np.sum(Wm[:, None, None] * r_pred_stack, axis=0)
+    devs_r = r_pred_stack - mean_r[None, :, :]
+    P_full_r = np.einsum("i,ijk,ijl->jkl", Wc, devs_r, devs_r)
+    P_diag_r = np.array([np.diag(np.diag(P)) for P in P_full_r])
+    inv_cov_r = inv(P_diag_r[-1])
+
     r_pred_all = r_pred_stack[0]
+    v_pred_all = v_pred_stack[0]
 
-    mean_pred = np.sum(Wm[:, None, None] * r_pred_stack, axis=0)
-    deviations = r_pred_stack - mean_pred[None, :, :]
-    P_full = np.einsum("i,ijk,ijl->jkl", Wc, deviations, deviations)
-    P_diag = np.array([np.diag(np.diag(P)) for P in P_full])
-    inv_cov = inv(P_diag[-1])
+    # Monte Carlo
+    r_mc, _ = monte_carlo_propagation(init_state, control_profile, segments)
+    mean_mc_r = np.mean(r_mc, axis=0)
+    devs_mc = r_mc - mean_mc_r[None, :, :]
+    W_mc = np.ones(r_mc.shape[0]) / r_mc.shape[0]
+    P_mc_full = np.einsum("i,ijk,ijl->jkl", W_mc, devs_mc, devs_mc)
+    P_mc_diag = np.array([np.diag(np.diag(P)) for P in P_mc_full])
+    inv_cov_mc = inv(P_mc_diag[-1])
 
-    r_mc, v_mc = monte_carlo_propagation(init_state, control_profile, segments)
     r_mc_final = r_mc[:, -1, :]
-    r_mc_mean_final = np.mean(r_mc_final, axis=0)
+    mean_mc_final = np.mean(r_mc_final, axis=0)
 
     final_time = time_vals[-1]
     sigma0_rows = X_bundle[(X_bundle[:, 0] == final_time) & (X_bundle[:, -1] == 0)]
     appended = next((row for row in sigma0_rows if np.allclose(row[8:15], 0)), None)
     if appended is None:
         raise ValueError(f"Appended sigma 0 not found at t = {final_time:.6f}")
-
     r_ref, v_ref = mee2rv.mee2rv(*appended[1:7].reshape(6, 1), mu)
     r_ref = r_ref.flatten()
     v_ref = v_ref.flatten()
 
-    mahalanobis_pred = mahalanobis(r_pred_all[-1], r_ref, inv_cov)
-    mahalanobis_mc_mean = mahalanobis(r_mc_mean_final, r_ref, inv_cov)
+    mahalanobis_pred = mahalanobis(r_pred_all[-1], r_ref, inv_cov_r)
+    mahalanobis_mc_mean = mahalanobis(mean_mc_final, r_ref, inv_cov_mc)
+
+    mahalanobis_list = []
+    for sigma_idx in range(1, len(sigma_indices)):
+        row = X_bundle[(X_bundle[:, 0] == final_time) & (X_bundle[:, -1] == sigma_idx)][0]
+        r_sigma, _ = mee2rv.mee2rv(*row[1:7].reshape(6, 1), mu)
+        dist = mahalanobis(r_sigma.flatten(), r_ref, inv_cov_r)
+        mahalanobis_list.append(dist)
 
     lam_pred_0 = control_profile[0]
     lam_true_0 = y_bundle[(X_bundle[:, 0] == time_vals[0]) & (X_bundle[:, -1] == 0)][0]
     cos_sim = cosine_similarity(lam_pred_0, lam_true_0)
 
-    r_mc_mean_full = np.mean(r_mc, axis=0)
-    mc_vs_pred_mse = np.mean((r_pred_all - r_mc_mean_full) ** 2)
+    mc_vs_pred_mse = np.mean((r_pred_all - mean_mc_r) ** 2)
 
     control_true = []
     for t0 in time_vals[:-1]:
         lam_true = y_bundle[(X_bundle[:, 0] == t0) & (X_bundle[:, -1] == 0)][0]
         control_true.append(lam_true)
-    control_true = np.array(control_true)
-    control_mse = mean_squared_error(np.array(control_profile), control_true)
+    control_mse = mean_squared_error(np.array(control_profile), np.array(control_true))
 
     metrics = {
         "time stride": stride,
@@ -128,7 +172,7 @@ def evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc):
         "final position deviation": np.linalg.norm(r_pred_all[-1] - r_ref),
         "mahalanobis_pred": mahalanobis_pred,
         "mahalanobis_mc_mean": mahalanobis_mc_mean,
-        "trace diff (cov)": np.trace(np.abs(P_diag[-1] - np.diag(np.diag(np.outer(r_pred_all[-1] - mean_pred[-1], r_pred_all[-1] - mean_pred[-1]))))),
+        "trace diff (cov)": np.trace(np.abs(P_mc_diag[-1] - P_diag_r[-1])),
         "mc vs predicted trajectory mse": mc_vs_pred_mse,
         "control MSE": control_mse,
         "x mse": np.mean((r_ref[0] - r_pred_all[:, 0]) ** 2),
@@ -137,22 +181,20 @@ def evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc):
         "vx mse": np.mean((v_ref[0] - v_pred_all[:, 0]) ** 2),
         "vy mse": np.mean((v_ref[1] - v_pred_all[:, 1]) ** 2),
         "vz mse": np.mean((v_ref[2] - v_pred_all[:, 2]) ** 2),
+        "mahalanobis > 3 count": sum(d > 3 for d in mahalanobis_list),
     }
 
-    count_gt3 = 0
-    for i in range(r_pred_stack.shape[0]):
-        dist = mahalanobis(r_pred_stack[i, -1], r_ref, inv_cov)
-        metrics[f"mahalanobis_sigma_{i}"] = dist
-        if dist > 3.0:
-            count_gt3 += 1
-    metrics["mahalanobis_count_gt3"] = count_gt3
+    for i, d in enumerate(mahalanobis_list, start=1):
+        metrics[f"mahalanobis_sigma_{i}"] = d
+    for j in range(3):
+        metrics[f"propagated_cov_diag_{j}"] = P_diag_r[-1][j]
+        metrics[f"monte_carlo_cov_diag_{j}"] = P_mc_diag[-1][j]
 
     return metrics
 
-# === Main Execution ===
 results = []
-W_bundle = joblib.load("sweep_stride_1_config_baseline_data.pkl")
-Wm, Wc = W_bundle["Wm"], W_bundle["Wc"]
+W_data = joblib.load("sweep_stride_1_config_baseline_data.pkl")
+Wm, Wc = W_data["Wm"], W_data["Wc"]
 
 stride_files = sorted(glob.glob("sweep_stride_*_config_baseline_data.pkl"))
 for file in stride_files:
