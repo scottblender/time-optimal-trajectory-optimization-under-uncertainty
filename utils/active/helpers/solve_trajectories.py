@@ -112,6 +112,15 @@ def solve_trajectories_with_covariance(
 
             full_P_combined.append(P_combined_cartesian_diag)
             full_means.append(mean_cartesian)
+
+            # print(f"\n=== Position Comparison at Initial and Final Step — Segment {j} for Bundle {i} ===")
+            # for sigma_idx, cartesian_state in enumerate(cartesian_sigma_points):
+            #     r_start = cartesian_state[1, :3]
+            #     r_end = cartesian_state[-1, :3]
+            #     mee_start = full_state_sigma_points[sigma_idx][1, :3]  # p/f/g
+            #     mee_end = full_state_sigma_points[sigma_idx][-1, :3]
+            #     print(f"Sigma {sigma_idx:2d}:\n  Step +1: Cartesian r = {r_start}, MEE p/f/g = {mee_start}\n  Step -1: Cartesian r = {r_end}, MEE p/f/g = {mee_end}")
+
             bundle_trajectories.append(sigma_point_trajectories)
 
             for sigma_idx in range(full_state_sigma_points.shape[0]):
@@ -121,6 +130,21 @@ def solve_trajectories_with_covariance(
                     time_history.append(time_values[step])
                     bundle_index_history.append(32)
                     sigma_point_index_history.append(sigma_idx)
+
+            # print("\n=== Comparing Stored X Values to Propagated Values at Final Step ===")
+            # for sigma_idx in range(15):
+            #     propagated_final = full_state_sigma_points[sigma_idx][-1]
+            #     X_match = [
+            #         (len(state_history) - 1 - k, s)
+            #         for k, s in enumerate(state_history[::-1])
+            #         if sigma_point_index_history[-1 - k] == sigma_idx
+            #     ]
+            #     if X_match:
+            #         _, x_state = X_match[0]
+            #         diff = np.linalg.norm(propagated_final - x_state)
+            #         print(f"Sigma {sigma_idx:2d}: Δ = {diff:.6e}")
+            #     else:
+            #         print(f"Sigma {sigma_idx:2d}: ❌ No match in X")
 
         P_combined_history.append(full_P_combined)
         means_history.append(full_means)
@@ -144,26 +168,19 @@ def solve_trajectories_with_covariance(
     X_sorted = X_unique[sort_indices]
     y_sorted = y_unique[sort_indices]
 
-   # === Append sigma 0 from next time step (assume it always exists in sigmas_combined) ===
     if sigmas_combined.shape[3] > 1:
-        # Extract Cartesian state for sigma 0 at t_{k+1}
-        sigma0_cartesian = sigmas_combined[0, 0, :, 1]  # (x, y, z, vx, vy, vz)
+        sigma0_cartesian = sigmas_combined[0, 0, :, 1]
         r0 = sigma0_cartesian[:3].reshape(1, -1)
         v0 = sigma0_cartesian[3:6].reshape(1, -1)
 
-        # Use mass from mass_bundles (already indexed by time and bundle)
         time_idx = time_steps[1]
-        m0 = mass_bundles[time_idx, 0]  # bundle 0
-
-        # Convert to MEE
+        m0 = mass_bundles[time_idx, 0]
         mee_state = rv2mee.rv2mee(r0, v0, mu).flatten()
         mee_full = np.hstack((mee_state, m0))
 
-        # Retrieve control and time
-        lam_val = new_lam_bundles[time_idx, :, 0]  # bundle 0
+        lam_val = new_lam_bundles[time_idx, :, 0]
         time_val = forwardTspan[time_idx]
 
-        # Append to X/y
         X_extra = np.hstack([
             time_val,
             mee_full,
@@ -175,4 +192,5 @@ def solve_trajectories_with_covariance(
 
         X_sorted = np.vstack([X_sorted, X_extra])
         y_sorted = np.vstack([y_sorted, y_extra])
+
     return np.array(trajectories), np.array(P_combined_history), np.array(means_history), X_sorted, y_sorted

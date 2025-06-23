@@ -9,21 +9,15 @@ import odefunc
 import calc_residuals_bundle
 import run_solve_ivp
 
-def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU, num_bundles):
+def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU, num_bundles, time_resolution_minutes=60):
     """
     Computes the spacecraft trajectory and generates perturbed trajectory bundles for Monte Carlo sampling.
     Now also returns mass history using mass directly from integration.
     """
-
-    hour_nd = 3600 / TU 
-
-    
-    # Number of steps needed to go from tfound to 0 in 1-hour intervals
-    num_steps = int(round(tfound / hour_nd)) + 1  # +1 to include both tfound and 0
-
-    # Create time span for trajectory integration 
+    resolution_nd = (time_resolution_minutes * 60) / TU
+    num_steps = int(round(tfound / resolution_nd)) + 1
     tspan = np.linspace(0, tfound, num_steps)
-
+    
     # Extract the initial trajectory solution parameters (lam_sol)
     lam_sol = p_sol[0:7]
     
