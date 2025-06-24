@@ -9,6 +9,7 @@ from sklearn.metrics import mean_squared_error
 from scipy.integrate import solve_ivp
 from scipy.spatial.distance import mahalanobis
 from numpy.linalg import inv
+import re
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
@@ -32,20 +33,8 @@ def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12)
 
 def monte_carlo_propagation(init_state_mee, control_profile, segments, num_samples=100):
-    # Convert init state to ECI
     r0_eci, v0_eci = mee2rv.mee2rv(*[np.array([val]) for val in init_state_mee[:6]], mu)
     m0_val = init_state_mee[6]
-
-    # Define ECI covariance
-    P_pos = np.eye(3) * 0.01
-    P_vel = np.eye(3) * 0.0001
-    P_mass = np.array([[0.0001]])
-    P_init = np.block([
-        [P_pos, np.zeros((3, 3)), np.zeros((3, 1))],
-        [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
-        [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
-    ])
-
     mean_eci = np.hstack([r0_eci.flatten(), v0_eci.flatten(), m0_val])
     samples_eci = np.random.multivariate_normal(mean_eci, P_init, size=num_samples)
 
@@ -74,7 +63,7 @@ def monte_carlo_propagation(init_state_mee, control_profile, segments, num_sampl
         v_hist.append(np.vstack(v_traj))
     return np.array(r_hist), np.array(v_hist)
 
-def evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc):
+def evaluate_model_with_sigma0_alignment(X, y, stride, distribution, Wm, Wc):
     X_train, X_test, y_train, y_test = train_test_split(X[:, :-2], y, test_size=0.2, random_state=42)
     rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
     rf.fit(X_train, y_train)
@@ -122,7 +111,6 @@ def evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc):
     r_pred_all = r_pred_stack[0]
     v_pred_all = v_pred_stack[0]
 
-    # Monte Carlo
     r_mc, _ = monte_carlo_propagation(init_state, control_profile, segments)
     mean_mc_r = np.mean(r_mc, axis=0)
     devs_mc = r_mc - mean_mc_r[None, :, :]
@@ -158,15 +146,12 @@ def evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc):
     cos_sim = cosine_similarity(lam_pred_0, lam_true_0)
 
     mc_vs_pred_mse = np.mean((r_pred_all - mean_mc_r) ** 2)
-
-    control_true = []
-    for t0 in time_vals[:-1]:
-        lam_true = y_bundle[(X_bundle[:, 0] == t0) & (X_bundle[:, -1] == 0)][0]
-        control_true.append(lam_true)
+    control_true = [y_bundle[(X_bundle[:, 0] == t0) & (X_bundle[:, -1] == 0)][0] for t0 in time_vals[:-1]]
     control_mse = mean_squared_error(np.array(control_profile), np.array(control_true))
 
     metrics = {
         "time stride": stride,
+        "distribution": distribution,
         "model mse": mean_squared_error(y_test, rf.predict(X_test)),
         "cosine similarity": cos_sim,
         "final position deviation": np.linalg.norm(r_pred_all[-1] - r_ref),
@@ -196,14 +181,23 @@ results = []
 W_data = joblib.load("sweep_stride_1_config_baseline_data.pkl")
 Wm, Wc = W_data["Wm"], W_data["Wc"]
 
-stride_files = sorted(glob.glob("sweep_stride_*_config_baseline_data.pkl"))
+stride_files = sorted(glob.glob("sweep_stride_*_config_*_data.pkl"))
+pattern = r"sweep_stride_(\d+)_config_(.+)_data\.pkl"
+
 for file in stride_files:
-    stride = int(file.split("_")[2])
+    filename = os.path.basename(file)
+    match = re.match(pattern, filename)
+    if not match:
+        print(f"Skipping unrecognized file format: {filename}")
+        continue
+    stride = int(match.group(1))
+    distribution = match.group(2)  # captures "high", "high_pos", "high_pos_mass", etc.
     data = joblib.load(file)
     X, y = data["X"], data["y"]
-    metrics = evaluate_model_with_sigma0_alignment(X, y, stride, Wm, Wc)
+    metrics = evaluate_model_with_sigma0_alignment(X, y, stride, distribution, Wm, Wc)
     results.append(metrics)
 
+
 df = pd.DataFrame(results)
-df.to_csv("ml_stride_sigma0_aligned_metrics.csv", index=False)
-print("Saved: ml_stride_sigma0_aligned_metrics.csv")
+df.to_csv("ml_stride_distribution_metrics.csv", index=False)
+print("Saved: ml_stride_distribution_metrics.csv")
