@@ -194,6 +194,8 @@ for file in stride_files:
     distribution = match.group(2)  # captures "high", "high_pos", "high_pos_mass", etc.
     data = joblib.load(file)
     X, y = data["X"], data["y"]
+    print("X shape:", X.shape)  # Input features
+    print("y shape:", y.shape)  # Target values
     metrics = evaluate_model_with_sigma0_alignment(X, y, stride, distribution, Wm, Wc)
     results.append(metrics)
 

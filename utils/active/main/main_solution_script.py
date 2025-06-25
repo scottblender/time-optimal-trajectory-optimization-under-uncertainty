@@ -142,7 +142,8 @@ for stride in time_strides:
             backTspan, time_steps, num_time_steps, 1, sigmas_combined,
             lam_b, m_b, mu, F, c, m0, g0, Wm, Wc
         )
-
+        print("X shape:", X.shape)  # Input features
+        print("y shape:", y.shape)  # Target values
         mc_traj, mc_P_hist, mc_means_hist, mc_X, mc_y = generate_monte_carlo_trajectories.generate_monte_carlo_trajectories(
             backTspan=backTspan, time_steps=time_steps, num_time_steps=num_time_steps,
             num_bundles=1, sigmas_combined=sigmas_combined,
