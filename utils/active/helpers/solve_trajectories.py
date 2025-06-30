@@ -1,196 +1,126 @@
 import numpy as np
-import scipy.integrate
-import rv2mee
-import mee2rv
-import odefunc
+from multiprocessing import Pool
+from tqdm import tqdm
+import sys
+import os
 
-def solve_trajectories_with_covariance(
-    backTspan, time_steps, num_time_steps, num_bundles, sigmas_combined,
-    new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
+from odefunc import odefunc
+from mee2rv import mee2rv
+
+def custom_rk45_batch(f, t_eval, y0_batch):
+    N, D = y0_batch.shape
+    T = len(t_eval)
+    dt = t_eval[1] - t_eval[0]
+    Y = np.zeros((N, T, D))
+    Y[:, 0, :] = y0_batch
+
+    for i in range(1, T):
+        t = t_eval[i - 1]
+        y = Y[:, i - 1, :]
+
+        k1 = f(t, y)
+        k2 = f(t + dt/4, y + dt/4 * k1)
+        k3 = f(t + 3*dt/8, y + dt * (3/32 * k1 + 9/32 * k2))
+        k4 = f(t + 12/13*dt, y + dt * (1932/2197 * k1 - 7200/2197 * k2 + 7296/2197 * k3))
+        k5 = f(t + dt, y + dt * (439/216 * k1 - 8 * k2 + 3680/513 * k3 - 845/4104 * k4))
+        k6 = f(t + dt/2, y + dt * (-8/27 * k1 + 2 * k2 - 3544/2565 * k3 + 1859/4104 * k4 - 11/40 * k5))
+
+        Y[:, i, :] = y + dt * (16/135 * k1 + 6656/12825 * k3 + 28561/56430 * k4 - 9/50 * k5 + 2/55 * k6)
+
+    return Y
+
+
+def _solve_single_segment(bundle_idx, time_idx, time_steps, sigmas_combined, new_lam_bundles, m_b,
+                          mu, F, c, m0, g0, Wm, Wc, substeps=5, evals_per_substep=10):
+    t0 = time_steps[time_idx]
+    t1 = time_steps[time_idx + 1]
+    num_sigmas = sigmas_combined.shape[1]
+    total_eval_points = substeps * evals_per_substep
+
+    r_hist = np.zeros((num_sigmas, total_eval_points, 3))
+    v_hist = np.zeros((num_sigmas, total_eval_points, 3))
+    mass_hist = np.zeros((num_sigmas, total_eval_points))
+    X_rows, y_rows = [], []
+
+    lam0 = new_lam_bundles[time_idx, :, bundle_idx]
+    lam1 = new_lam_bundles[time_idx + 1, :, bundle_idx]
+    control_segments = np.linspace(0, 1, substeps)
+
+    state = sigmas_combined[bundle_idx, :, :, time_idx]  # (num_sigmas, 7)
+
+    for s_idx in range(substeps):
+        tau0 = t0 + (t1 - t0) * (s_idx / substeps)
+        tau1 = t0 + (t1 - t0) * ((s_idx + 1) / substeps)
+        t_eval = np.linspace(tau0, tau1, evals_per_substep)
+
+        lam = (1 - control_segments[s_idx]) * lam0 + control_segments[s_idx] * lam1
+
+        def f(t, x_batch):
+            return np.array([odefunc(t, x_i, mu, F, c, m0, g0, lam) for x_i in x_batch])
+
+        result = custom_rk45_batch(f, t_eval, state)
+        state = result[:, -1, :]
+
+        p, f_, g, h, k, L = result[:, :, 0], result[:, :, 1], result[:, :, 2], result[:, :, 3], result[:, :, 4], result[:, :, 5]
+        r_eval, v_eval = mee2rv(p.flatten(), f_.flatten(), g.flatten(), h.flatten(), k.flatten(), L.flatten(), mu)
+        r_eval = r_eval.reshape(num_sigmas, evals_per_substep, 3)
+        v_eval = v_eval.reshape(num_sigmas, evals_per_substep, 3)
+
+        idx_start = s_idx * evals_per_substep
+        idx_end = (s_idx + 1) * evals_per_substep
+
+        r_hist[:, idx_start:idx_end] = r_eval
+        v_hist[:, idx_start:idx_end] = v_eval
+        mass_hist[:, idx_start:idx_end] = result[:, :, 6]
+
+        for sigma_idx in range(num_sigmas):
+            X_rows.append(np.hstack([tau0, state[sigma_idx, :7], bundle_idx, sigma_idx]))
+            y_rows.append(lam)
+
+    r_final = r_hist[:, -1, :]
+    v_final = v_hist[:, -1, :]
+    m_final = mass_hist[:, -1]
+    means = np.sum(Wm[:, None] * np.hstack([r_final, v_final, m_final[:, None]]), axis=0)
+    deviations = np.hstack([r_final, v_final, m_final[:, None]]) - means
+    P = np.einsum("i,ij,ik->jk", Wc, deviations, deviations)
+
+    trajs = np.hstack([r_hist, v_hist, mass_hist[:, :, None]])
+    return np.array(X_rows), np.array(y_rows), P, means, trajs
+
+
+def _solve_single_segment_wrapper(args):
+    return _solve_single_segment(*args)
+
+
+def solve_trajectories_with_covariance_parallel_with_progress(
+    backTspan, time_steps, num_time_steps, num_bundles,
+    sigmas_combined, new_lam_bundles, m_b, mu, F, c, m0, g0,
+    Wm, Wc, num_workers=4
 ):
-    forwardTspan = backTspan[::-1]
-    time = [forwardTspan[time_steps[i]] for i in range(num_time_steps)]
-    trajectories = []
+    X_list, y_list, P_list, means_list, traj_list = [], [], [], [], []
 
-    P_combined_history = []
-    means_history = []
-    state_history = []
-    control_state_history = []
-    covariance_history = []
-    time_history = []
-    bundle_index_history = []
-    sigma_point_index_history = []
+    for b_idx in tqdm(range(num_bundles), desc="Bundles", position=0):
+        jobs = [
+            (b_idx, t_idx, time_steps, sigmas_combined, new_lam_bundles, m_b,
+             mu, F, c, m0, g0, Wm, Wc)
+            for t_idx in range(num_time_steps - 1)
+        ]
 
-    def sample_within_bounds(mean, cov, max_tries=100):
-        for _ in range(max_tries):
-            sample = np.random.multivariate_normal(mean, cov)
-            z_score = np.abs(sample - mean) / np.sqrt(np.diag(cov))
-            if np.all(z_score <= 3):
-                return sample
-        return mean  # fallback
+        with Pool(processes=num_workers) as pool:
+            for result in tqdm(pool.imap_unordered(_solve_single_segment_wrapper, jobs),
+                               total=len(jobs), desc=f"Bundle {b_idx:03d}", position=1, leave=False, mininterval=0.1):
+                X_i, y_i, P_i, means_i, traj_i = result
+                X_list.append(X_i)
+                y_list.append(y_i)
+                P_list.append(P_i)
+                means_list.append(means_i)
+                traj_list.append(traj_i)
 
-    for i in range(num_bundles):
-        bundle_trajectories = []
-        for j in range(num_time_steps - 1):
-            tstart, tend = time[j], time[j + 1]
-            sigma_combined = sigmas_combined[i, :, :, j]
-            sigma_point_trajectories = []
+    X = np.vstack(X_list)
+    y = np.vstack(y_list)
+    P_combined_history = list(P_list)
+    means_history = list(means_list)
+    trajectories = np.array(traj_list)
 
-            idx_start = np.where(forwardTspan == tstart)[0][0]
-            new_lam = new_lam_bundles[idx_start, :, i]
-            P_lam = np.eye(7) * 0.001
-
-            full_state_sigma_points = []
-            cartesian_sigma_points = []
-
-            num_updates = 10
-            sub_times = np.linspace(tstart, tend, num_updates + 1)
-
-            full_P_combined = []
-            full_means = []
-
-            for sigma_idx in range(sigma_combined.shape[0]):
-                time_values = []
-
-                r0, v0, mass = sigma_combined[sigma_idx, :3], sigma_combined[sigma_idx, 3:6], sigma_combined[sigma_idx, 6]
-                initial_state = rv2mee.rv2mee(np.array([r0]), np.array([v0]), mu)
-                initial_state = np.append(initial_state, mass)
-                S = np.append(initial_state, new_lam)
-
-                full_states = []
-                cartesian_states = []
-
-                prev_lam_mean = new_lam.copy()
-
-                for k in range(num_updates):
-                    tsub_start, tsub_end = sub_times[k], sub_times[k + 1]
-
-                    if k == 0:
-                        new_lam_current = new_lam
-                    else:
-                        new_lam_current = sample_within_bounds(prev_lam_mean, P_lam)
-
-                    prev_lam_mean = new_lam_current.copy()
-                    S[-7:] = new_lam_current
-
-                    func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
-                    tspan = np.linspace(tsub_start, tsub_end, 20)
-
-                    Sf = scipy.integrate.solve_ivp(func, [tsub_start, tsub_end], S, method='RK45',
-                                                   rtol=1e-6, atol=1e-8, t_eval=tspan)
-
-                    if Sf.success:
-                        full_states.append(Sf.y.T)
-                        time_values.append(Sf.t)
-                        S = Sf.y[:, -1]
-
-                full_states = np.vstack(full_states)
-                full_state_sigma_points.append(full_states[:, :7])
-                time_values = np.hstack(time_values)
-
-                r_new, v_new = mee2rv.mee2rv(full_states[:, 0], full_states[:, 1], full_states[:, 2],
-                                             full_states[:, 3], full_states[:, 4], full_states[:, 5], mu)
-                cartesian_state = np.hstack((r_new, v_new, full_states[:, 6].reshape(-1, 1)))
-                cartesian_states.append(cartesian_state)
-
-                sigma_point_trajectories.append(cartesian_state)
-                cartesian_sigma_points.append(cartesian_state)
-                control_state_history.append(full_states[:, -7:])
-
-            full_state_sigma_points = np.array(full_state_sigma_points)
-            cartesian_sigma_points = np.array(cartesian_sigma_points)
-
-            mean_state = np.sum(Wm[:, np.newaxis, np.newaxis] * full_state_sigma_points, axis=0)
-            deviations = full_state_sigma_points - mean_state[np.newaxis, :, :]
-            P_combined = np.einsum('i,ijk,ijl->jkl', Wc, deviations, deviations)
-            P_combined_diag = np.array([np.diag(np.diag(P)) for P in P_combined])
-
-            mean_cartesian = np.sum(Wm[:, np.newaxis, np.newaxis] * cartesian_sigma_points, axis=0)
-            deviations_cartesian = cartesian_sigma_points - mean_cartesian[np.newaxis, :, :]
-            P_combined_cartesian = np.einsum('i,ijk,ijl->jkl', Wc, deviations_cartesian, deviations_cartesian)
-            P_combined_cartesian_diag = np.array([np.diag(np.diag(P)) for P in P_combined_cartesian])
-
-            full_P_combined.append(P_combined_cartesian_diag)
-            full_means.append(mean_cartesian)
-
-            # print(f"\n=== Position Comparison at Initial and Final Step — Segment {j} for Bundle {i} ===")
-            # for sigma_idx, cartesian_state in enumerate(cartesian_sigma_points):
-            #     r_start = cartesian_state[1, :3]
-            #     r_end = cartesian_state[-1, :3]
-            #     mee_start = full_state_sigma_points[sigma_idx][1, :3]  # p/f/g
-            #     mee_end = full_state_sigma_points[sigma_idx][-1, :3]
-            #     print(f"Sigma {sigma_idx:2d}:\n  Step +1: Cartesian r = {r_start}, MEE p/f/g = {mee_start}\n  Step -1: Cartesian r = {r_end}, MEE p/f/g = {mee_end}")
-
-            bundle_trajectories.append(sigma_point_trajectories)
-
-            for sigma_idx in range(full_state_sigma_points.shape[0]):
-                for step in range(full_state_sigma_points.shape[1]):
-                    state_history.append(full_state_sigma_points[sigma_idx, step])
-                    covariance_history.append(np.diagonal(P_combined_diag[step]))
-                    time_history.append(time_values[step])
-                    bundle_index_history.append(32)
-                    sigma_point_index_history.append(sigma_idx)
-
-            # print("\n=== Comparing Stored X Values to Propagated Values at Final Step ===")
-            # for sigma_idx in range(15):
-            #     propagated_final = full_state_sigma_points[sigma_idx][-1]
-            #     X_match = [
-            #         (len(state_history) - 1 - k, s)
-            #         for k, s in enumerate(state_history[::-1])
-            #         if sigma_point_index_history[-1 - k] == sigma_idx
-            #     ]
-            #     if X_match:
-            #         _, x_state = X_match[0]
-            #         diff = np.linalg.norm(propagated_final - x_state)
-            #         print(f"Sigma {sigma_idx:2d}: Δ = {diff:.6e}")
-            #     else:
-            #         print(f"Sigma {sigma_idx:2d}: ❌ No match in X")
-
-        P_combined_history.append(full_P_combined)
-        means_history.append(full_means)
-        trajectories.append(bundle_trajectories)
-
-    time_history = np.hstack(time_history).reshape(-1, 1)
-    state_history = np.vstack(state_history)
-    control_state_history = np.vstack(control_state_history)
-    covariance_history = np.vstack(covariance_history)
-    bundle_index_history = np.array(bundle_index_history).reshape(-1, 1)
-    sigma_point_index_history = np.array(sigma_point_index_history).reshape(-1, 1)
-
-    X = np.hstack((time_history, state_history, covariance_history, bundle_index_history, sigma_point_index_history))
-    y = control_state_history
-
-    _, unique_indices = np.unique(X[:, [0, -1]], axis=0, return_index=True)
-    X_unique = X[unique_indices]
-    y_unique = y[unique_indices]
-
-    sort_indices = np.lexsort((X_unique[:, 0], X_unique[:, -1], X_unique[:, -2]))
-    X_sorted = X_unique[sort_indices]
-    y_sorted = y_unique[sort_indices]
-
-    if sigmas_combined.shape[3] > 1:
-        sigma0_cartesian = sigmas_combined[0, 0, :, 1]
-        r0 = sigma0_cartesian[:3].reshape(1, -1)
-        v0 = sigma0_cartesian[3:6].reshape(1, -1)
-
-        time_idx = time_steps[1]
-        m0 = mass_bundles[time_idx, 0]
-        mee_state = rv2mee.rv2mee(r0, v0, mu).flatten()
-        mee_full = np.hstack((mee_state, m0))
-
-        lam_val = new_lam_bundles[time_idx, :, 0]
-        time_val = forwardTspan[time_idx]
-
-        X_extra = np.hstack([
-            time_val,
-            mee_full,
-            np.zeros(7),
-            32,
-            0
-        ])
-        y_extra = lam_val
-
-        X_sorted = np.vstack([X_sorted, X_extra])
-        y_sorted = np.vstack([y_sorted, y_extra])
-
-    return np.array(trajectories), np.array(P_combined_history), np.array(means_history), X_sorted, y_sorted
+    return trajectories, P_combined_history, means_history, X, y
