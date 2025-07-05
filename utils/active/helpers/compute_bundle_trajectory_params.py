@@ -14,10 +14,13 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
     Computes the spacecraft trajectory and generates perturbed trajectory bundles for Monte Carlo sampling.
     Now also returns mass history using mass directly from integration.
     """
-    resolution_nd = (time_resolution_minutes * 60) / TU
+    step_seconds = time_resolution_minutes * 60  # 180 minutes → 10800 seconds
+    resolution_nd = step_seconds / TU            # Convert to non-dimensional units
+
+    # build tspan array
     num_steps = int(round(tfound / resolution_nd)) + 1
     tspan = np.linspace(0, tfound, num_steps)
-    
+
     # Extract the initial trajectory solution parameters (lam_sol)
     lam_sol = p_sol[0:7]
     

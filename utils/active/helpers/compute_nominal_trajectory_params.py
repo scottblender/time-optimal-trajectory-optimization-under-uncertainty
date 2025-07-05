@@ -31,12 +31,12 @@ def compute_nominal_trajectory_params():
     tf_g_UB = 25000 # upper bound of final time
 
     # Earth Initial Conditions (position and velocity in km and km/s)
-    R_E_0 = 1e3 * 1e8 * np.array([[-0.036378710816509, 1.470997987841786, -0.000022614410420]])  # km
-    V_E_0 = 1e3 * np.array([[-30.265097988218205, -0.848685467901138, 0.000050530360628]])  # km/s
+    R_E_0 = 1e3 * 1e8 * np.array([-0.036378710816509, 1.470997987841786, -0.000022614410420])  # km
+    V_E_0 = 1e3 * np.array([-30.265097988218205, -0.848685467901138, 0.000050530360628])  # km/s
     
     # Dionysus Initial Conditions (position and velocity in km and km/s)
-    R_V_0 = 1e3 * 1e8 * np.array([[-3.024520148842469, 3.160971796320275,  0.828722900755180]])  # km
-    V_V_0 = 1e3 * np.array([[-4.533473799840294, -13.110309800847542, 0.656163826017450]])  # km/s
+    R_V_0 = 1e3 * 1e8 * np.array([-3.024520148842469, 3.160971796320275,  0.828722900755180])  # km
+    V_V_0 = 1e3 * np.array([-4.533473799840294, -13.110309800847542, 0.656163826017450]) # km/s
     
     # Constants for the system
     mu_s = 132712 * 10**6 * 1e9  # km^3/s^2 (Gravitational Parameter for the Sun)
@@ -70,7 +70,7 @@ def compute_nominal_trajectory_params():
     
     # Convert initial position and velocity to Equinoctial Elements (MEE)
     s0 = rv2mee.rv2mee(R_E_0, V_E_0, mu_s)
-    s0 = np.append(s0, np.array([1]), axis=0)  # Add a dummy value for further processing
+    s0 = np.hstack([s0, 1.0])  # Add a dummy value for further processing
     s0[0] = np.divide(s0[0], DU)  # Non-dimensionalize position
     
     s_t = rv2mee.rv2mee(R_V_0, V_V_0, mu_s)
