@@ -13,7 +13,6 @@ from mee2rv import mee2rv
 from rv2mee import rv2mee
 
 
-# ✅ Top-level listener function for progress updates
 def listener(q, total):
     with tqdm(total=total, desc="Total integration progress") as pbar:
         completed = 0
@@ -56,21 +55,24 @@ def sample_within_bounds(mean, cov, max_tries=100):
 
 
 def _solve_entire_bundle_to_disk(bundle_idx, time_steps, sigmas_combined, new_lam_bundles, m_b,
-                                 mu, F, c, m0, g0, Wm, Wc, out_dir,
+                                 mu, F, c, m0, g0, Wm, Wc, backTspan, out_dir,
                                  substeps=5, evals_per_substep=10, progress_queue=None):
     try:
+        forwardTspan = backTspan[::-1]
         num_time_steps = len(time_steps)
         num_sigmas = sigmas_combined.shape[1]
 
         X_rows, y_rows = [], []
-        all_cartesian = []
+        all_cartesian = [[] for _ in range(num_sigmas)]
 
         for time_idx in range(num_time_steps - 1):
-            t0 = time_steps[time_idx]
-            t1 = time_steps[time_idx + 1]
+            t0_idx = time_steps[time_idx]
+            t1_idx = time_steps[time_idx + 1]
+            t0 = forwardTspan[t0_idx]
+            t1 = forwardTspan[t1_idx]
 
             P_lam = np.eye(7) * 0.001
-            lam0 = new_lam_bundles[time_idx, :, bundle_idx]
+            lam0 = new_lam_bundles[t0_idx, :, bundle_idx]
             prev_lam_mean = lam0.copy()
 
             eci_state = sigmas_combined[bundle_idx, :, :, time_idx]
@@ -101,7 +103,7 @@ def _solve_entire_bundle_to_disk(bundle_idx, time_steps, sigmas_combined, new_la
                     r_eval, v_eval = mee2rv(p, f_, g, h, k, L, mu)
                     mass_eval = result[sigma_idx, :, 6]
                     cartesian = np.hstack([r_eval, v_eval, mass_eval[:, None]])
-                    all_cartesian.append(cartesian)
+                    all_cartesian[sigma_idx].append(cartesian)
 
                     for step in range(evals_per_substep):
                         t_val = t_eval[step]
@@ -113,24 +115,29 @@ def _solve_entire_bundle_to_disk(bundle_idx, time_steps, sigmas_combined, new_la
                 if progress_queue is not None:
                     progress_queue.put(1)
 
-        all_cartesian = np.array(all_cartesian).reshape(num_sigmas, -1, 7)
+        all_cartesian = [np.vstack(steps) for steps in all_cartesian]
+        all_cartesian = np.stack(all_cartesian)
+        total_steps = all_cartesian.shape[1]
+
         means = np.sum(Wm[:, None, None] * all_cartesian, axis=0)
         deviations = all_cartesian - means[None, :, :]
         P_all = np.einsum("i,ijk,ijl->jkl", Wc, deviations, deviations)
         P_diag = np.array([np.diag(np.diag(P)) for P in P_all])
-        cov_diag = P_diag.diagonal(axis1=1, axis2=2)
+        cov_diag = np.array([np.diag(P) for P in P_diag])
+        cov_diag_repeated = np.repeat(cov_diag, num_sigmas, axis=0)
 
-        cov_diag_repeated = np.tile(cov_diag, (num_sigmas, 1))
         X_rows_np = np.array(X_rows)
         y_rows_np = np.array(y_rows)
         X_rows_np[:, 8:15] = cov_diag_repeated
+        time_vector = np.array([[row[0]] for row in X_rows])  
 
         joblib.dump({
             "trajectories": all_cartesian,
             "P_combined_history": P_diag,
             "means_history": means,
             "X": X_rows_np,
-            "y": y_rows_np
+            "y": y_rows_np,
+            "time_history": time_vector  
         }, os.path.join(out_dir, f"bundle_{bundle_idx:03d}.pkl"))
 
         return "ok"
@@ -152,13 +159,13 @@ def solve_trajectories_with_covariance_parallel_with_progress(
     Wm, Wc, num_workers=4, output_dir="bundle_outputs",
     substeps=5, evals_per_substep=10
 ):
+    import shutil
+
     if os.path.exists(output_dir):
         for f in glob.glob(os.path.join(output_dir, "*")):
             try:
                 os.remove(f)
             except IsADirectoryError:
-                # Recursively delete subdirectories if needed
-                import shutil
                 shutil.rmtree(f)
     else:
         os.makedirs(output_dir)
@@ -174,7 +181,7 @@ def solve_trajectories_with_covariance_parallel_with_progress(
 
     job_args = [
         (b_idx, time_steps, sigmas_combined, new_lam_bundles, m_b,
-         mu, F, c, m0, g0, Wm, Wc, output_dir, substeps, evals_per_substep, progress_queue)
+         mu, F, c, m0, g0, Wm, Wc, backTspan, output_dir, substeps, evals_per_substep, progress_queue)
         for b_idx in range(num_bundles)
     ]
 
@@ -186,8 +193,8 @@ def solve_trajectories_with_covariance_parallel_with_progress(
 
     listener_process.join()
     tqdm.write(f"All bundles saved to: {output_dir}")
-    
-    all_trajectories, all_P_hist, all_means_hist, all_X, all_y = [], [], [], [], []
+
+    all_trajectories, all_P_hist, all_means_hist, all_X, all_y, all_times = [], [], [], [], [], []
 
     for file in sorted(glob.glob(os.path.join(output_dir, "bundle_*.pkl"))):
         data = joblib.load(file)
@@ -196,11 +203,41 @@ def solve_trajectories_with_covariance_parallel_with_progress(
         all_means_hist.append(data["means_history"])
         all_X.append(data["X"])
         all_y.append(data["y"])
+        all_times.append(data["time_history"])
+
+        X = np.vstack(all_X)
+    y = np.vstack(all_y)
+    time_vector = np.vstack(all_times)
+
+    # === Append sigma 0 at t_{k+1} for bundle 0 ===
+    if sigmas_combined.shape[3] > 1:
+        bundle_idx = 0
+        sigma_idx = 0
+        t_idx = time_steps[1]
+        forwardTspan = backTspan[::-1]
+        time_val = forwardTspan[t_idx]
+
+        sigma0_cartesian = sigmas_combined[bundle_idx, sigma_idx, :, t_idx]
+        r0 = sigma0_cartesian[:3].reshape(1, -1)
+        v0 = sigma0_cartesian[3:6].reshape(1, -1)
+        m0_val = m_b[t_idx, bundle_idx]
+        lam_val = new_lam_bundles[t_idx, :, bundle_idx]
+        mee_state = rv2mee(r0, v0, mu).flatten()
+        mee_full = np.hstack((mee_state, m0_val))
+
+        X_extra = np.hstack([time_val, mee_full, np.zeros(7), bundle_idx, 0])
+        y_extra = lam_val
+
+        X = np.vstack([X, X_extra])
+        y = np.vstack([y, y_extra])
+
+        time_vector = np.vstack([time_vector, np.array([[time_val]])])
 
     return (
         np.stack(all_trajectories),
         np.stack(all_P_hist),
         np.stack(all_means_hist),
-        np.vstack(all_X),
-        np.vstack(all_y),
+        X,
+        y,
+        time_vector
     )

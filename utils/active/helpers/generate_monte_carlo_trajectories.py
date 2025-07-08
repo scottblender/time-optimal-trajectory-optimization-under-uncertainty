@@ -1,66 +1,68 @@
+# generate_monte_carlo_trajectories_parallel.py
 import numpy as np
-import scipy.integrate
+from scipy.integrate import solve_ivp
+from tqdm import tqdm
+from multiprocessing import Pool, Manager, Process
+from numpy.linalg import inv
+import traceback
 import rv2mee
 import mee2rv
 import odefunc
 
-def generate_monte_carlo_trajectories(backTspan, time_steps, num_time_steps, num_bundles,
-                                       sigmas_combined, new_lam_bundles, mu, F, c, m0, g0, num_samples):
-    forwardTspan = backTspan[::-1]
-    time = [forwardTspan[time_steps[i]] for i in range(num_time_steps)]
 
-    trajectories = []
-    P_combined_history = []
-    means_history = []
-    state_history = []
-    control_state_history = []
-    covariance_history = []
-    time_history = []
-    bundle_index_history = []
-    sample_index_history = []
+def _listener(q, total):
+    with tqdm(total=total, desc="Monte Carlo progress") as pbar:
+        completed = 0
+        while completed < total:
+            msg = q.get()
+            if msg == 1:
+                pbar.update(1)
+                completed += 1
+            elif msg == -1:
+                completed += 1
+                pbar.write("[WARN] Subprocess failed")
 
-    # === Define Initial Covariances ===
-    P_pos = np.eye(3) * 0.01
-    P_vel = np.eye(3) * 0.0001
-    P_mass = np.array([[0.0001]])
-    P_init = np.block([
-        [P_pos, np.zeros((3, 3)), np.zeros((3, 1))],
-        [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
-        [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
-    ])
-    P_control = np.eye(7) * 0.001
 
-    def sample_within_bounds(mean, cov, max_tries=100):
-        for _ in range(max_tries):
-            sample = np.random.multivariate_normal(mean, cov)
-            z_score = np.abs(sample - mean) / np.sqrt(np.diag(cov))
-            if np.all(z_score <= 3):
-                return sample
-        return mean
+def sample_within_bounds(mean, cov, max_tries=100):
+    for _ in range(max_tries):
+        sample = np.random.multivariate_normal(mean, cov)
+        z_score = np.abs(sample - mean) / np.sqrt(np.diag(cov))
+        if np.all(z_score <= 3):
+            return sample
+    return mean
 
-    for i in range(num_bundles):
+
+def _solve_mc_single_bundle(args):
+    (bundle_idx, time_steps, num_time_steps, sigmas_combined, new_lam_bundles,
+     mu, F, c, m0, g0, num_samples, P_init, P_control, backTspan, queue) = args
+
+    try:
+        forwardTspan = backTspan[::-1]
+        time = [forwardTspan[time_steps[i]] for i in range(num_time_steps)]
+        num_updates = 10
+
         bundle_trajectories = []
+        state_history = []
+        control_state_history = []
+        covariance_history = []
+        time_history = []
+        bundle_index_history = []
+        sample_index_history = []
+
+        P_combined_history = []
+        means_history = []
+
         for j in range(num_time_steps - 1):
             tstart, tend = time[j], time[j + 1]
-            sigma_state = sigmas_combined[i, 0, :, j]  # ECI + mass
-
-            new_lam_nominal = new_lam_bundles[j, :, i]
+            sigma_state = sigmas_combined[bundle_idx, 0, :, j]
+            new_lam_nominal = new_lam_bundles[j, :, bundle_idx]
+            sub_times = np.linspace(tstart, tend, num_updates + 1)
 
             full_state_samples = []
             cartesian_samples = []
 
-            num_updates = 10
-            sub_times = np.linspace(tstart, tend, num_updates + 1)
-
-            P_combined_t = []
-            mean_cartesian_t = []
-
             for sample_idx in range(num_samples):
-                if sample_idx == 0:
-                    sample_state = sigma_state
-                else:
-                    sample_state = sample_within_bounds(sigma_state, P_init)
-
+                sample_state = sigma_state if sample_idx == 0 else sample_within_bounds(sigma_state, P_init)
                 r0 = sample_state[:3]
                 v0 = sample_state[3:6]
                 mass = sample_state[6]
@@ -73,16 +75,13 @@ def generate_monte_carlo_trajectories(backTspan, time_steps, num_time_steps, num
 
                 for k in range(num_updates):
                     tsub_start, tsub_end = sub_times[k], sub_times[k + 1]
-                    if k == 0:
-                        new_lam_k = new_lam_nominal
-                    else:
-                        new_lam_k = sample_within_bounds(new_lam_nominal, P_control)
+                    lam_k = new_lam_nominal if k == 0 else sample_within_bounds(new_lam_nominal, P_control)
+                    S[-7:] = lam_k
 
-                    S[-7:] = new_lam_k
                     func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
                     tspan = np.linspace(tsub_start, tsub_end, 20)
 
-                    Sf = scipy.integrate.solve_ivp(func, [tsub_start, tsub_end], S, t_eval=tspan,
+                    Sf = solve_ivp(func, [tsub_start, tsub_end], S, t_eval=tspan,
                                                    rtol=1e-6, atol=1e-8)
                     if Sf.success:
                         full_states.append(Sf.y.T)
@@ -109,33 +108,94 @@ def generate_monte_carlo_trajectories(backTspan, time_steps, num_time_steps, num
             P_combined_sample = np.einsum('ijk,ijl->jkl', deviations, deviations) / num_samples
             P_combined_diag = np.array([np.diag(np.diag(P)) for P in P_combined_sample])
 
-            P_combined_t.append(P_combined_diag)
-            mean_cartesian_t.append(mean_cartesian)
+            P_combined_history.append(P_combined_diag)
+            means_history.append(mean_cartesian)
 
             for sample_idx in range(full_state_samples.shape[0]):
                 for step in range(full_state_samples.shape[1]):
                     state_history.append(full_state_samples[sample_idx, step])
                     covariance_history.append(np.diagonal(P_combined_diag[step]))
                     time_history.append(time_values[step])
-                    bundle_index_history.append(32)
+                    bundle_index_history.append(bundle_idx)
                     sample_index_history.append(sample_idx)
 
-        P_combined_history.append(P_combined_t)
-        means_history.append(mean_cartesian_t)
+            if queue is not None:
+                queue.put(1)
 
-        bundle_trajectories = np.array(bundle_trajectories).reshape(num_time_steps - 1, num_samples, -1, 7)
-        trajectories.append(np.transpose(bundle_trajectories, (0, 1, 2, 3)))
+        return (np.array(bundle_trajectories).reshape(num_time_steps - 1, num_samples, -1, 7),
+                P_combined_history, means_history,
+                state_history, control_state_history,
+                covariance_history, time_history,
+                bundle_index_history, sample_index_history)
 
-    time_history = np.hstack(time_history).reshape(-1, 1)
-    state_history = np.vstack(state_history)
-    control_state_history = np.vstack(control_state_history)
-    covariance_history = np.vstack(covariance_history)
-    bundle_index_history = np.array(bundle_index_history).reshape(-1, 1)
-    sample_index_history = np.array(sample_index_history).reshape(-1, 1)
+    except Exception:
+        if queue is not None:
+            queue.put(-1)
+        traceback.print_exc()
+        return None
 
-    X = np.hstack((time_history, state_history, covariance_history, bundle_index_history, sample_index_history))
-    y = control_state_history
 
+def generate_monte_carlo_trajectories_parallel(
+    backTspan, time_steps, num_time_steps, num_bundles,
+    sigmas_combined, new_lam_bundles, mu, F, c, m0, g0,
+    num_samples=1000, num_workers=4
+):
+    P_pos = np.eye(3) * 0.01
+    P_vel = np.eye(3) * 0.0001
+    P_mass = np.array([[0.0001]])
+    P_init = np.block([
+        [P_pos, np.zeros((3, 3)), np.zeros((3, 1))],
+        [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
+        [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
+    ])
+    P_control = np.eye(7) * 0.001
+
+    total = num_bundles
+    manager = Manager()
+    q = manager.Queue()
+    listener = Process(target=_listener, args=(q, total))
+    listener.start()
+
+    args_list = [
+        (i, time_steps, num_time_steps, sigmas_combined, new_lam_bundles,
+         mu, F, c, m0, g0, num_samples, P_init, P_control, backTspan, q)
+        for i in range(num_bundles)
+    ]
+
+    with Pool(num_workers) as pool:
+        results = pool.map(_solve_mc_single_bundle, args_list)
+
+    listener.join()
+
+    # Unpack and merge
+    trajectories, P_hist, means_hist = [], [], []
+    X_rows, y_rows, cov_rows, time_rows, b_rows, s_rows = [], [], [], [], [], []
+
+    for res in results:
+        if res is None:
+            continue
+        traj, P, M, X, y, cov, t, b, s = res
+        trajectories.append(traj)
+        P_hist.append(P)
+        means_hist.append(M)
+        X_rows.extend(X)
+        y_rows.extend(y)
+        cov_rows.extend(cov)
+        time_rows.extend(t)
+        b_rows.extend(b)
+        s_rows.extend(s)
+
+    X = np.hstack((
+        np.array(time_rows).reshape(-1, 1),
+        np.array(X_rows).reshape(-1, 7),                     
+        np.array(cov_rows).reshape(-1, 7),    
+        np.array(b_rows).reshape(-1, 1),
+        np.array(s_rows).reshape(-1, 1)
+    ))
+
+    y = np.vstack(y_rows)
+
+    # Unique by MEE
     mee_state_subset = X[:, 1:7]
     _, unique_indices = np.unique(mee_state_subset, axis=0, return_index=True)
     X_unique = X[unique_indices]
@@ -145,4 +205,10 @@ def generate_monte_carlo_trajectories(backTspan, time_steps, num_time_steps, num
     X_sorted = X_unique[sort_indices]
     y_sorted = y_unique[sort_indices]
 
-    return np.array(trajectories), np.array(P_combined_history), np.array(means_history), X_sorted, y_sorted
+    return (
+        np.array(trajectories),
+        np.array(P_hist),
+        np.array(means_hist),
+        X_sorted,
+        y_sorted
+    )
