@@ -87,7 +87,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
         func = lambda t, x: odefunc.odefunc(t, x, mu, F, c, m0, g0)
 
         result_container = {}
-        thread = Thread(target=run_solve_ivp.run_solve_ivp, args=(func, [tfound, 0], y_pert, 'RK45', backTspan, 1e-3, 1e-8, result_container))
+        thread = Thread(target=run_solve_ivp.run_solve_ivp, args=(func, [tfound, 0], y_pert, 'RK45', backTspan, 1e-3, 1e-6, result_container))
         start_time = time.time()
         thread.start()
         thread.join(timeout=10)

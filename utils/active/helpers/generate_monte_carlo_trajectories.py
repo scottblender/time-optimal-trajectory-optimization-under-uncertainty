@@ -1,4 +1,3 @@
-# generate_monte_carlo_trajectories_parallel.py
 import numpy as np
 from scipy.integrate import solve_ivp
 from tqdm import tqdm
@@ -38,7 +37,8 @@ def _solve_mc_single_bundle(args):
 
     try:
         forwardTspan = backTspan[::-1]
-        time = [forwardTspan[time_steps[i]] for i in range(num_time_steps)]
+        time = forwardTspan[time_steps]
+        print(time)
         num_updates = 10
 
         bundle_trajectories = []
@@ -82,7 +82,7 @@ def _solve_mc_single_bundle(args):
                     tspan = np.linspace(tsub_start, tsub_end, 20)
 
                     Sf = solve_ivp(func, [tsub_start, tsub_end], S, t_eval=tspan,
-                                                   rtol=1e-6, atol=1e-8)
+                                   rtol=1e-3, atol=1e-6)
                     if Sf.success:
                         full_states.append(Sf.y.T)
                         time_values.append(Sf.t)
@@ -99,6 +99,10 @@ def _solve_mc_single_bundle(args):
 
                 bundle_trajectories.append(cartesian_state)
                 control_state_history.append(full_states[:, -7:])
+
+                # ✅ Update progress per sample
+                if queue is not None:
+                    queue.put(1)
 
             full_state_samples = np.array(full_state_samples)
             cartesian_samples = np.array(cartesian_samples)
@@ -118,9 +122,6 @@ def _solve_mc_single_bundle(args):
                     time_history.append(time_values[step])
                     bundle_index_history.append(bundle_idx)
                     sample_index_history.append(sample_idx)
-
-            if queue is not None:
-                queue.put(1)
 
         return (np.array(bundle_trajectories).reshape(num_time_steps - 1, num_samples, -1, 7),
                 P_combined_history, means_history,
@@ -150,7 +151,9 @@ def generate_monte_carlo_trajectories_parallel(
     ])
     P_control = np.eye(7) * 0.001
 
-    total = num_bundles
+    # ✅ Show progress per sample
+    total = num_bundles * (num_time_steps - 1) * num_samples
+
     manager = Manager()
     q = manager.Queue()
     listener = Process(target=_listener, args=(q, total))
@@ -187,15 +190,14 @@ def generate_monte_carlo_trajectories_parallel(
 
     X = np.hstack((
         np.array(time_rows).reshape(-1, 1),
-        np.array(X_rows).reshape(-1, 7),                     
-        np.array(cov_rows).reshape(-1, 7),    
+        np.array(X_rows).reshape(-1, 7),
+        np.array(cov_rows).reshape(-1, 7),
         np.array(b_rows).reshape(-1, 1),
         np.array(s_rows).reshape(-1, 1)
     ))
 
     y = np.vstack(y_rows)
 
-    # Unique by MEE
     mee_state_subset = X[:, 1:7]
     _, unique_indices = np.unique(mee_state_subset, axis=0, return_index=True)
     X_unique = X[unique_indices]
