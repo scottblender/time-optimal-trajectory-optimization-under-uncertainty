@@ -38,7 +38,6 @@ def _solve_mc_single_bundle(args):
     try:
         forwardTspan = backTspan[::-1]
         time = forwardTspan[time_steps]
-        print(time)
         num_updates = 10
 
         bundle_trajectories = []

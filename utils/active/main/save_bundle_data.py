@@ -13,7 +13,7 @@ import compute_bundle_trajectory_params
 mu_s = 132712 * 10**6 * 1e9
 p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
 
-num_bundles = 4
+num_bundles = 5
 time_resolution_minutes = 10000
 
 r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan = compute_bundle_trajectory_params.compute_bundle_trajectory_params(

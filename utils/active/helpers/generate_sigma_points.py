@@ -3,7 +3,7 @@ from filterpy.kalman import MerweScaledSigmaPoints
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 
-# Move this function to top-level so it is picklable
+# Moved to top-level for multiprocessing
 def _generate_sigma_points_for_bundle(i, nsd, time_steps, P_combined, r_bundles, v_bundles, mass_bundles, alpha, beta, kappa):
     weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
     num_points = len(time_steps)
@@ -21,7 +21,7 @@ def _generate_sigma_points_for_bundle(i, nsd, time_steps, P_combined, r_bundles,
 
 def generate_sigma_points(nsd=None, alpha=None, beta=None, kappa=None,
                           P_pos=None, P_vel=None, P_mass=None,
-                          num_time_steps=None, backTspan=None,
+                          time_steps=None,  # <-- Updated: pass this in explicitly
                           r_bundles=None, v_bundles=None, mass_bundles=None,
                           num_workers=4):
     if kappa is None:
@@ -33,16 +33,16 @@ def generate_sigma_points(nsd=None, alpha=None, beta=None, kappa=None,
         [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
     ])
 
-    time_steps = np.arange(num_time_steps)
+    if time_steps is None:
+        raise ValueError("You must provide a time_steps array.")
+
     num_bundles = r_bundles.shape[2]
 
-    # Prepare argument list
     args_list = [
         (i, nsd, time_steps, P_combined, r_bundles, v_bundles, mass_bundles, alpha, beta, kappa)
         for i in range(num_bundles)
     ]
 
-    # Use process pool without lambda
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         results = list(tqdm(
             executor.map(_generate_sigma_points_for_bundle, *zip(*args_list)),
@@ -52,4 +52,4 @@ def generate_sigma_points(nsd=None, alpha=None, beta=None, kappa=None,
 
     sigmas_combined = np.stack(results, axis=0)
     weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
-    return sigmas_combined, P_combined, time_steps, num_time_steps, weights.Wm, weights.Wc
+    return sigmas_combined, P_combined, time_steps, len(time_steps), weights.Wm, weights.Wc
