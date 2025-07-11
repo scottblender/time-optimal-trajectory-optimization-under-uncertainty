@@ -9,37 +9,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'h
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 
-# === Compute Nominal and Bundle Trajectory Params ===
-mu_s = 132712 * 10**6 * 1e9
-p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
-
-num_bundles = 5
-time_resolution_minutes = 10000
-
-r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan = compute_bundle_trajectory_params.compute_bundle_trajectory_params(
-    p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU, num_bundles, time_resolution_minutes
-)
-
-# === Save All Bundle Data ===
-data = {
-    "r_tr": r_tr,
-    "v_tr": v_tr,
-    "mass_tr": mass_tr,
-    "S_bundles": S_bundles,
-    "r_bundles": r_bundles,
-    "v_bundles": v_bundles,
-    "new_lam_bundles": new_lam_bundles,
-    "mass_bundles": mass_bundles,
-    "backTspan": backTspan,
-    "mu": mu, "F": F, "c": c, "m0": m0, "g0": g0
-}
-joblib.dump(data, "bundle_data.pkl")
-print("Saved nominal bundle data to bundle_data.pkl")
-
-# === Efficiently Stream Rows to CSV ===
 def stream_initial_csv_for_multiple_bundles(
     backTspan, r_bundles, v_bundles, mass_bundles, new_lam_bundles,
-    bundle_indices, output_filename="initial_bundles_all.csv"
+    bundle_indices, output_filename
 ):
     backTspan_rev = backTspan[::-1]
     r_bundles_rev = r_bundles[::-1]
@@ -59,7 +31,7 @@ def stream_initial_csv_for_multiple_bundles(
         writer = csv.writer(f)
         writer.writerow(header)
 
-        progress = tqdm(total=total_rows, desc="Writing CSV")
+        progress = tqdm(total=total_rows, desc=f"Writing {output_filename}")
         for bundle_index in bundle_indices:
             r_b = r_bundles_rev[:, :, bundle_index]
             v_b = v_bundles_rev[:, :, bundle_index]
@@ -80,13 +52,49 @@ def stream_initial_csv_for_multiple_bundles(
 
     print(f"Saved initial bundle states to {output_filename}")
 
-# === Call CSV Stream Writer ===
-stream_initial_csv_for_multiple_bundles(
-    backTspan=backTspan,
-    r_bundles=r_bundles,
-    v_bundles=v_bundles,
-    mass_bundles=mass_bundles,
-    new_lam_bundles=new_lam_bundles,
-    bundle_indices=list(range(num_bundles - 25)),
-    output_filename="initial_bundles_all.csv"
-)
+
+def main():
+    mu_s = 132712 * 10**6 * 1e9
+    p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
+
+    num_bundles = 100
+    time_resolution_list = [1000, 2000, 4000, 8000, 16000, 32000]  # in minutes
+
+    for time_resolution_minutes in time_resolution_list:
+        print(f"\n[INFO] Generating bundle data at {time_resolution_minutes} min resolution...")
+
+        r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan = \
+            compute_bundle_trajectory_params.compute_bundle_trajectory_params(
+                p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU,
+                num_bundles, time_resolution_minutes
+            )
+
+        # Save bundle data
+        data = {
+            "r_tr": r_tr,
+            "v_tr": v_tr,
+            "mass_tr": mass_tr,
+            "S_bundles": S_bundles,
+            "r_bundles": r_bundles,
+            "v_bundles": v_bundles,
+            "new_lam_bundles": new_lam_bundles,
+            "mass_bundles": mass_bundles,
+            "backTspan": backTspan,
+            "mu": mu, "F": F, "c": c, "m0": m0, "g0": g0
+        }
+
+        out_pkl = f"bundle_data_{time_resolution_minutes}min.pkl"
+        joblib.dump(data, out_pkl)
+        print(f"Saved: {out_pkl}")
+
+        # Save initial CSVs
+        out_csv = f"initial_bundles_{time_resolution_minutes}min.csv"
+        stream_initial_csv_for_multiple_bundles(
+            backTspan, r_bundles, v_bundles, mass_bundles, new_lam_bundles,
+            bundle_indices=list(range(num_bundles - 25)),
+            output_filename=out_csv
+        )
+
+
+if __name__ == "__main__":
+    main()

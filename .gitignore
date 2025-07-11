@@ -166,3 +166,5 @@ control_comparisons.txt
 *.png
 /mlruns
 *.txt
+*.pdf
+*.pdf
