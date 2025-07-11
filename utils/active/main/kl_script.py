@@ -9,16 +9,15 @@ def extract_bundle_idx(path):
     return int(match.group(1)) if match else -1
 
 def read_runtime(stride_minutes):
-    runtime_path = f"stride_{stride_minutes}min/runtime.txt"
-    if os.path.exists(runtime_path):
+    path = f"stride_{stride_minutes}min/runtime.txt"
+    if os.path.exists(path):
         try:
-            return float(open(runtime_path).read().strip())
+            return float(open(path).read().strip())
         except:
             return None
     return None
 
 def extract_max_position_trace(cov):
-    # Cov shape: (7,7) → we take top-left 3x3 position covariance
     try:
         pos_cov = cov[:3, :3]
         eigvals = np.linalg.eigvalsh(pos_cov)
@@ -26,15 +25,26 @@ def extract_max_position_trace(cov):
     except:
         return np.nan
 
+def read_mahalanobis(segment_dir):
+    path = os.path.join(segment_dir, "mahalanobis_distances.txt")
+    if os.path.exists(path):
+        try:
+            vals = np.loadtxt(path)
+            return np.max(vals) if vals.size > 0 else np.nan
+        except:
+            return np.nan
+    return np.nan
+
 def main():
     stride_dirs = sorted(glob("stride_*min"))
     summary_rows = []
+    grouped_by_stride = {}
 
     for stride_dir in stride_dirs:
-        stride_match = re.search(r"stride_(\d+)min", stride_dir)
-        if not stride_match:
+        match = re.search(r"stride_(\d+)min", stride_dir)
+        if not match:
             continue
-        stride_minutes = int(stride_match.group(1))
+        stride_minutes = int(match.group(1))
         runtime = read_runtime(stride_minutes)
 
         for segment_dir in glob(f"{stride_dir}/segment_*"):
@@ -44,6 +54,7 @@ def main():
 
             if not os.path.exists(kl_path):
                 continue
+
             try:
                 kl_vals = np.loadtxt(kl_path)
             except Exception as e:
@@ -52,15 +63,15 @@ def main():
 
             label = "max" if "max" in segment_dir else "min"
             bundle_idx = extract_bundle_idx(segment_dir)
-
             cov_sigma = np.loadtxt(sig_path) if os.path.exists(sig_path) else np.full((7, 7), np.nan)
             cov_mc = np.loadtxt(mc_path) if os.path.exists(mc_path) else np.full((7, 7), np.nan)
 
             max_tr_sigma = extract_max_position_trace(cov_sigma)
             max_tr_mc = extract_max_position_trace(cov_mc)
             cov_ratio = max_tr_sigma / max_tr_mc if max_tr_mc > 1e-12 else np.nan
+            max_mahal = read_mahalanobis(segment_dir)
 
-            summary_rows.append({
+            row = {
                 "stride_minutes": stride_minutes,
                 "segment": label,
                 "bundle_idx": bundle_idx,
@@ -70,10 +81,58 @@ def main():
                 "max_tr_sigma": max_tr_sigma,
                 "max_tr_mc": max_tr_mc,
                 "cov_ratio": cov_ratio,
+                "max_mahalanobis": max_mahal,
                 "runtime_sec": runtime
-            })
+            }
 
-    # Sort and write
+            summary_rows.append(row)
+            if stride_minutes not in grouped_by_stride:
+                grouped_by_stride[stride_minutes] = {}
+            grouped_by_stride[stride_minutes][label] = row
+
+    # === Score and select best stride ===
+    best_stride = None
+    best_score = float("inf")
+    scored_rows = []
+
+    for stride, segs in grouped_by_stride.items():
+        if "max" not in segs or "min" not in segs:
+            continue
+
+        max_row, min_row = segs["max"], segs["min"]
+
+        if max_row["max_KL"] > 0.2 or min_row["max_KL"] > 0.2:
+            continue
+        if max_row["max_tr_sigma"] > 2.0 or min_row["max_tr_sigma"] > 2.0:
+            continue
+
+        mean_kl = max(max_row["mean_KL"], min_row["mean_KL"])
+        max_cov = max(max_row["max_tr_sigma"], min_row["max_tr_sigma"])
+        cov_mismatch = abs(np.log(max_row["cov_ratio"] * min_row["cov_ratio"]))
+        max_mahal = max(max_row["max_mahalanobis"], min_row["max_mahalanobis"])
+
+        # Score with tunable weights
+        score = (
+            1.0 * mean_kl +
+            5.0 * max_cov +
+            1.0 * cov_mismatch +
+            1.5 * max_mahal  
+        )
+
+        scored_rows.append({
+            "stride_minutes": stride,
+            "mean_KL": mean_kl,
+            "max_cov": max_cov,
+            "cov_mismatch": cov_mismatch,
+            "max_mahalanobis": max_mahal,
+            "score": score
+        })
+
+        if score < best_score:
+            best_score = score
+            best_stride = stride
+
+    # === Save outputs ===
     summary_rows.sort(key=lambda x: (x["stride_minutes"], x["segment"]))
     fieldnames = list(summary_rows[0].keys()) if summary_rows else []
 
@@ -83,7 +142,18 @@ def main():
         for row in summary_rows:
             writer.writerow(row)
 
-    print(f"Summary written to kl_summary.csv with {len(summary_rows)} entries.")
+    with open("kl_score_summary.csv", "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=[
+            "stride_minutes", "mean_KL", "max_cov", "cov_mismatch", "max_mahalanobis", "score"
+        ])
+        writer.writeheader()
+        for row in scored_rows:
+            writer.writerow(row)
+
+    if best_stride is not None:
+        print(f"[BEST] stride_minutes = {best_stride} (score = {best_score:.4f})")
+    else:
+        print("[INFO] No stride passed threshold. Adjust KL or covariance bounds.")
 
 if __name__ == "__main__":
     main()

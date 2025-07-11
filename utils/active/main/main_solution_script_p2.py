@@ -11,7 +11,7 @@ from solve_trajectories import solve_trajectories_with_covariance_parallel_with_
 
 def main():
     print("Loading bundle data...")
-    data = joblib.load("bundle_data.pkl")
+    data = joblib.load("bundle_data_1000min.pkl")
     r_bundles = data["r_bundles"][::-1]
     v_bundles = data["v_bundles"][::-1]
     mass_bundles = data["mass_bundles"][::-1]
