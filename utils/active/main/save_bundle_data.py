@@ -58,7 +58,7 @@ def main():
     p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
 
     num_bundles = 50
-    time_resolution_list = np.arange(1000,12001,1000)  # in minutes
+    time_resolution_list = np.arange(1000, 12001, 1000)  # in minutes
 
     for time_resolution_minutes in time_resolution_list:
         print(f"\n[INFO] Generating bundle data at {time_resolution_minutes} min resolution...")
@@ -69,8 +69,12 @@ def main():
                 num_bundles, time_resolution_minutes
             )
 
+        out_dir = f"stride_{time_resolution_minutes}min"
+        os.makedirs(out_dir, exist_ok=True)
+
         # Save bundle data
-        data = {
+        out_pkl = os.path.join(out_dir, f"bundle_data_{time_resolution_minutes}min.pkl")
+        joblib.dump({
             "r_tr": r_tr,
             "v_tr": v_tr,
             "mass_tr": mass_tr,
@@ -81,14 +85,11 @@ def main():
             "mass_bundles": mass_bundles,
             "backTspan": backTspan,
             "mu": mu, "F": F, "c": c, "m0": m0, "g0": g0
-        }
-
-        out_pkl = f"bundle_data_{time_resolution_minutes}min.pkl"
-        joblib.dump(data, out_pkl)
+        }, out_pkl)
         print(f"Saved: {out_pkl}")
 
-        # Save initial CSVs
-        out_csv = f"initial_bundles_{time_resolution_minutes}min.csv"
+        # Save initial CSVs for bundle indices [0, 24]
+        out_csv = os.path.join(out_dir, f"initial_bundles_{time_resolution_minutes}min.csv")
         stream_initial_csv_for_multiple_bundles(
             backTspan, r_bundles, v_bundles, mass_bundles, new_lam_bundles,
             bundle_indices=list(range(num_bundles - 25)),

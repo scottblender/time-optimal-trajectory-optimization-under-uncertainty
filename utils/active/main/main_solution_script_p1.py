@@ -1,5 +1,3 @@
-# main_solution_script_p1.py
-
 import os
 import sys
 import time
@@ -23,7 +21,7 @@ from solve_trajectories import solve_trajectories_with_covariance_parallel_with_
 from generate_monte_carlo_trajectories import generate_monte_carlo_trajectories_parallel
 
 def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.2, scale=3.0):
-    cov = 0.5 * (cov + cov.T)
+    cov = 0.5 * (cov + cov.T) + np.eye(3) * 1e-10
     eigvals, eigvecs = np.linalg.eigh(cov)
     if np.any(eigvals <= 0): return
     order = np.argsort(eigvals)[::-1]
@@ -73,13 +71,12 @@ def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
     return max(kl_div, 0.0)
 
 def main():
-    stride_minutes_list = np.arange(1000,12001,1000)
+    stride_minutes_list = np.arange(1000, 12001, 1000)
 
     for stride_minutes in stride_minutes_list:
         start_time = time.time()
         out_root = f"stride_{stride_minutes}min"
-        os.makedirs(out_root, exist_ok=True)
-        bundle_file = f"bundle_data_{stride_minutes}min.pkl"
+        bundle_file = os.path.join(out_root, f"bundle_data_{stride_minutes}min.pkl")
         if not os.path.exists(bundle_file):
             print(f"[SKIP] Missing file: {bundle_file}")
             continue
@@ -92,8 +89,8 @@ def main():
         m_b = data["mass_bundles"][::-1]
         lam_b = data["new_lam_bundles"][::-1]
         backTspan = data["backTspan"]
+        forwardTspan = backTspan[::-1]
         mu, F, c, m0, g0 = data["mu"], data["F"], data["c"], data["m0"], data["g0"]
-        forwardTspan = np.flip(backTspan)
         num_bundles = r_b.shape[2]
 
         for name, include_bundles in [("bundle_vs_nominal_trajectories", True), ("nominal_only_trajectory", False)]:
@@ -112,10 +109,21 @@ def main():
             plt.savefig(f"{out_root}/{name}.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
             plt.close()
 
-        widths = np.linalg.norm(np.max(r_b, axis=2) - np.min(r_b, axis=2), axis=1)
-        np.savetxt(f"{out_root}/bundle_segment_widths.txt", widths, fmt="%.6f")
-        max_t_idx = int(np.argmax(widths))
-        min_t_idx = next(i for i in np.argsort(widths) if i + 1 < len(backTspan))
+        widths = []
+        for t in range(r_b.shape[0] - 1):
+            points = r_b[t].T
+            dists = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=2)
+            max_dist = np.max(dists)
+            widths.append((forwardTspan[t], max_dist))
+
+        widths_array = np.array(widths)
+        np.savetxt(f"{out_root}/bundle_segment_widths.txt", widths_array, fmt="%.6f", header="time_sec width_km")
+
+        max_t_idx = int(np.argmax(widths_array[:, 1]))
+        min_t_idx = int(np.argmin(widths_array[:, 1]))
+
+        print(f"[INFO] Max width at t = {widths_array[max_t_idx, 0]:.2f} TU → {widths_array[max_t_idx, 1]:.6f} km")
+        print(f"[INFO] Min width at t = {widths_array[min_t_idx, 0]:.2f} TU → {widths_array[min_t_idx, 1]:.6f} km")
 
         for label, idx in [("max", max_t_idx), ("min", min_t_idx)]:
             dists = np.linalg.norm(r_b[idx] - r_tr[idx][:, np.newaxis], axis=0)
@@ -171,16 +179,16 @@ def main():
                 ax.plot(r[:, 0], r[:, 1], r[:, 2],
                         color='black' if i == 0 else 'gray',
                         linestyle='-' if i == 0 else '--',
-                        lw=2.2 if i == 0 else 0.8, alpha=1.0, zorder = 5 if i==0 else 4)
+                        lw=2.2 if i == 0 else 0.8, alpha=1.0, zorder=5 if i==0 else 4)
                 ax.scatter(r[0, 0], r[0, 1], r[0, 2], color='black', marker='o', s=10, zorder=1)
                 ax.scatter(r[-1, 0], r[-1, 1], r[-1, 2], color='black', marker='X', s=10, zorder=1)
 
-            plot_3sigma_ellipsoid(ax, r[0], P_sigma[0, 0, :3, :3])
-            plot_3sigma_ellipsoid(ax, r[-1], P_sigma[0, -1, :3, :3])
+            plot_3sigma_ellipsoid(ax, mu_sigma[0, 0, :3], P_sigma[0, 0, :3, :3])
+            plot_3sigma_ellipsoid(ax, mu_sigma[0, -1, :3], P_sigma[0, -1, :3, :3])
 
             for j in range(0, len(mc_traj[0][0]), 5):
                 full_mc = np.concatenate([seg[j] for seg in mc_traj[0]], axis=0)
-                ax.plot(full_mc[:, 0], full_mc[:, 1], full_mc[:, 2], color='dimgray', lw=0.8, alpha=0.4, zorder=3)
+                ax.plot(full_mc[:, 0], full_mc[:, 1], full_mc[:, 2], linestyle=':', color='dimgray', lw=0.8, alpha=0.4, zorder=3)
                 ax.scatter(full_mc[0, 0], full_mc[0, 1], full_mc[0, 2], color='0.4', s=8, marker='o', alpha=0.3,zorder=1)
                 ax.scatter(full_mc[-1, 0], full_mc[-1, 1], full_mc[-1, 2], color='0.4', s=8, marker='X', alpha=0.3,zorder=1)
 

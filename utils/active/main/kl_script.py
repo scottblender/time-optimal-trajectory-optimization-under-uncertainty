@@ -65,10 +65,12 @@ def main():
             continue
         stride_minutes = int(match.group(1))
         runtime = read_runtime(stride_minutes)
-        bundle_file = f"bundle_data_{stride_minutes}min.pkl"
+
+        # ✅ Reference the right bundle file inside the stride directory
+        bundle_file = os.path.join(stride_dir, f"bundle_data_{stride_minutes}min.pkl")
         est_data_size = estimate_data_size(bundle_file)
 
-        for segment_dir in glob(f"{stride_dir}/segment_*"):
+        for segment_dir in glob(os.path.join(stride_dir, "segment_*")):
             kl_path = os.path.join(segment_dir, "kl_divergence.txt")
             sig_path = os.path.join(segment_dir, "cov_sigma_final.txt")
             mc_path = os.path.join(segment_dir, "cov_mc_final.txt")
@@ -167,7 +169,8 @@ def main():
 
     with open("kl_score_summary.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=[
-            "stride_minutes", "mean_KL", "max_cov", "cov_mismatch", "max_mahalanobis", "estimated_data_size", "score"
+            "stride_minutes", "mean_KL", "max_cov", "cov_mismatch",
+            "max_mahalanobis", "estimated_data_size", "score"
         ])
         writer.writeheader()
         for row in scored_rows:
