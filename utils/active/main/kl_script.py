@@ -2,6 +2,7 @@ import os
 import re
 import numpy as np
 import csv
+import joblib
 from glob import glob
 
 def extract_bundle_idx(path):
@@ -35,6 +36,24 @@ def read_mahalanobis(segment_dir):
             return np.nan
     return np.nan
 
+def estimate_data_size(bundle_file):
+    try:
+        data = joblib.load(bundle_file)
+        backTspan = data["backTspan"]
+        r_b = data["r_bundles"][::-1]
+        v_b = data["v_bundles"][::-1]
+        m_b = data["mass_bundles"][::-1]
+        num_time_steps = len(backTspan)
+        num_bundles = r_b.shape[2]
+        num_sigmas = 15
+        num_columns = 24
+        rows_per_segment = 10 * 20  # substeps * evals_per_substep
+        total_rows = num_time_steps * num_bundles * num_sigmas * rows_per_segment
+        return total_rows * num_columns
+    except Exception as e:
+        print(f"[WARN] Failed to estimate data size for {bundle_file}: {e}")
+        return np.nan
+
 def main():
     stride_dirs = sorted(glob("stride_*min"))
     summary_rows = []
@@ -46,12 +65,13 @@ def main():
             continue
         stride_minutes = int(match.group(1))
         runtime = read_runtime(stride_minutes)
+        bundle_file = f"bundle_data_{stride_minutes}min.pkl"
+        est_data_size = estimate_data_size(bundle_file)
 
         for segment_dir in glob(f"{stride_dir}/segment_*"):
             kl_path = os.path.join(segment_dir, "kl_divergence.txt")
             sig_path = os.path.join(segment_dir, "cov_sigma_final.txt")
             mc_path = os.path.join(segment_dir, "cov_mc_final.txt")
-
             if not os.path.exists(kl_path):
                 continue
 
@@ -65,7 +85,6 @@ def main():
             bundle_idx = extract_bundle_idx(segment_dir)
             cov_sigma = np.loadtxt(sig_path) if os.path.exists(sig_path) else np.full((7, 7), np.nan)
             cov_mc = np.loadtxt(mc_path) if os.path.exists(mc_path) else np.full((7, 7), np.nan)
-
             max_tr_sigma = extract_max_position_trace(cov_sigma)
             max_tr_mc = extract_max_position_trace(cov_mc)
             cov_ratio = max_tr_sigma / max_tr_mc if max_tr_mc > 1e-12 else np.nan
@@ -82,7 +101,8 @@ def main():
                 "max_tr_mc": max_tr_mc,
                 "cov_ratio": cov_ratio,
                 "max_mahalanobis": max_mahal,
-                "runtime_sec": runtime
+                "runtime_sec": runtime,
+                "estimated_data_size": est_data_size
             }
 
             summary_rows.append(row)
@@ -98,9 +118,9 @@ def main():
     for stride, segs in grouped_by_stride.items():
         if "max" not in segs or "min" not in segs:
             continue
-
         max_row, min_row = segs["max"], segs["min"]
 
+        # Apply hard limits
         if max_row["max_KL"] > 0.2 or min_row["max_KL"] > 0.2:
             continue
         if max_row["max_tr_sigma"] > 2.0 or min_row["max_tr_sigma"] > 2.0:
@@ -110,13 +130,15 @@ def main():
         max_cov = max(max_row["max_tr_sigma"], min_row["max_tr_sigma"])
         cov_mismatch = abs(np.log(max_row["cov_ratio"] * min_row["cov_ratio"]))
         max_mahal = max(max_row["max_mahalanobis"], min_row["max_mahalanobis"])
+        data_size = max(max_row["estimated_data_size"], min_row["estimated_data_size"])
 
-        # Score with tunable weights
+        # Score: lower is better
         score = (
             1.0 * mean_kl +
-            5.0 * max_cov +
+            8.0 * max_cov +
             1.0 * cov_mismatch +
-            1.5 * max_mahal  
+            1.5 * max_mahal +
+            1e-9 * data_size  # prioritize small size with a soft weight
         )
 
         scored_rows.append({
@@ -125,6 +147,7 @@ def main():
             "max_cov": max_cov,
             "cov_mismatch": cov_mismatch,
             "max_mahalanobis": max_mahal,
+            "estimated_data_size": data_size,
             "score": score
         })
 
@@ -132,7 +155,7 @@ def main():
             best_score = score
             best_stride = stride
 
-    # === Save outputs ===
+    # Save summary CSVs
     summary_rows.sort(key=lambda x: (x["stride_minutes"], x["segment"]))
     fieldnames = list(summary_rows[0].keys()) if summary_rows else []
 
@@ -144,7 +167,7 @@ def main():
 
     with open("kl_score_summary.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=[
-            "stride_minutes", "mean_KL", "max_cov", "cov_mismatch", "max_mahalanobis", "score"
+            "stride_minutes", "mean_KL", "max_cov", "cov_mismatch", "max_mahalanobis", "estimated_data_size", "score"
         ])
         writer.writeheader()
         for row in scored_rows:

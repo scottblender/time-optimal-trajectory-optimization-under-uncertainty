@@ -73,7 +73,7 @@ def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
     return max(kl_div, 0.0)
 
 def main():
-    stride_minutes_list = [1000, 2000, 4000, 8000, 16000, 32000]
+    stride_minutes_list = np.arange(1000,12001,1000)
 
     for stride_minutes in stride_minutes_list:
         start_time = time.time()
