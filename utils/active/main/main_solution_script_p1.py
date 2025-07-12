@@ -110,7 +110,7 @@ def main():
             plt.close()
 
         widths = []
-        for t in range(r_b.shape[0] - 1):
+        for t in range(r_b.shape[0]):
             points = r_b[t].T
             dists = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=2)
             max_dist = np.max(dists)
@@ -121,6 +121,9 @@ def main():
 
         max_t_idx = int(np.argmax(widths_array[:, 1]))
         min_t_idx = int(np.argmin(widths_array[:, 1]))
+        if min_t_idx == len(widths_array) - 1:
+            sorted_indices = np.argsort(widths_array[:, 1])
+            min_t_idx = sorted_indices[1]
 
         print(f"[INFO] Max width at t = {widths_array[max_t_idx, 0]:.2f} TU → {widths_array[max_t_idx, 1]:.6f} km")
         print(f"[INFO] Min width at t = {widths_array[min_t_idx, 0]:.2f} TU → {widths_array[min_t_idx, 1]:.6f} km")
