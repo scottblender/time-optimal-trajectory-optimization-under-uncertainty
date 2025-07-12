@@ -67,9 +67,15 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
         joblib.dump({"X": X, "y": y, "Wm": Wm, "Wc": Wc}, os.path.join(out_dir, "data.pkl"))
         print(f"Saved: {out_dir}/data.pkl")
+        
+        # === Check output integrity ===
+        sigma0_rows = X[(X[:, -1] == 0) & np.all(np.abs(X[:, 8:15]) < 1e-12, axis=1)]
+        expected = (num_time_steps_full - 1) * (batch_end - batch_start)  # One appended row per segment per bundle
+        print(f"[CHECK] Found {len(sigma0_rows)} appended sigma₀ rows (expected {expected})")
+        if len(sigma0_rows) != expected:
+            print("[WARN] Some sigma₀ rows may be missing.")
 
     print("\nAll baseline batches completed.")
-
 
 if __name__ == "__main__":
     main()

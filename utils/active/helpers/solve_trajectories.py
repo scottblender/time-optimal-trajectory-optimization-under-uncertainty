@@ -8,7 +8,6 @@ from rv2mee import rv2mee
 from mee2rv import mee2rv
 from odefunc import odefunc
 
-
 def sample_within_bounds(mean, cov, max_tries=100):
     for _ in range(max_tries):
         sample = np.random.multivariate_normal(mean, cov)
@@ -16,7 +15,6 @@ def sample_within_bounds(mean, cov, max_tries=100):
         if np.all(z_score <= 3):
             return sample
     return mean
-
 
 def listener(q, total):
     with tqdm(total=total, desc="Total integration progress") as pbar:
@@ -29,7 +27,6 @@ def listener(q, total):
             elif msg == -1:
                 completed += 1
                 pbar.write("[WARN] Subprocess failed")
-
 
 def _solve_single_bundle(args):
     (bundle_index, backTspan, time_steps, num_time_steps, sigmas_combined,
@@ -52,6 +49,8 @@ def _solve_single_bundle(args):
         X_rows = np.zeros((total_rows, 17))  # [time, MEE(6), mass, diag cov(7), bundle, sigma]
         y_rows = np.zeros((total_rows, 7))   # control vector
         row_idx = 0
+        X_extra_rows = []
+        y_extra_rows = []
 
         for j in range(num_segments):
             tstart, tend = time[j], time[j + 1]
@@ -92,7 +91,7 @@ def _solve_single_bundle(args):
                     S = sol.y[:, -1]
 
                     if progress_queue is not None:
-                        progress_queue.put(len(sol.t))  # track actual rows added to X
+                        progress_queue.put(len(sol.t))
 
                 full_states = np.vstack(full_states)
                 time_values = np.hstack(time_values)
@@ -109,7 +108,7 @@ def _solve_single_bundle(args):
                     X_rows[row_idx + step, :] = np.hstack([
                         time_values[step],
                         full_states[step, :7],
-                        np.zeros(7),  # placeholder for diag cov
+                        np.zeros(7),
                         bundle_index,
                         sigma_idx
                     ])
@@ -134,11 +133,30 @@ def _solve_single_bundle(args):
                     index = (t * num_sigma) + sigma_idx + (j * num_sigma * steps_per_segment)
                     X_rows[index, 8:15] = cov_diag
 
+            # Append sigma0 at end of this segment (t_{k+1})
+            sigma0_cart = sigmas_combined[bundle_index, 0, :, j + 1]
+            r0 = sigma0_cart[:3].reshape(1, -1)
+            v0 = sigma0_cart[3:6].reshape(1, -1)
+            m0_val = sigma0_cart[6]
+            mee = rv2mee(r0, v0, mu).flatten()
+            t_append = time[j + 1]
+            lam = new_lam
+            X_extra = np.hstack([t_append, np.hstack((mee, m0_val)), np.zeros(7), bundle_index, 0])
+            y_extra = lam
+            X_extra_rows.append(X_extra)
+            y_extra_rows.append(y_extra)
+
             bundle_trajectories.append(sigma_point_trajectories)
             bundle_P_combined_history.append(P_combined_cartesian_diag)
             bundle_means_history.append(mean_cartesian)
 
-        return bundle_trajectories, bundle_P_combined_history, bundle_means_history, X_rows[:row_idx], y_rows[:row_idx]
+        X_rows = X_rows[:row_idx]
+        y_rows = y_rows[:row_idx]
+        if X_extra_rows:
+            X_rows = np.vstack([X_rows, X_extra_rows])
+            y_rows = np.vstack([y_rows, y_extra_rows])
+
+        return bundle_trajectories, bundle_P_combined_history, bundle_means_history, X_rows, y_rows
 
     except Exception:
         if progress_queue:
@@ -146,7 +164,6 @@ def _solve_single_bundle(args):
         print(f"[ERROR] Bundle {bundle_index} failed:")
         traceback.print_exc()
         return None
-
 
 def solve_trajectories_with_covariance_parallel_with_progress(
     backTspan, time_steps, num_time_steps, num_bundles,
@@ -181,7 +198,7 @@ def solve_trajectories_with_covariance_parallel_with_progress(
     X = np.vstack(X_list)
     y = np.vstack(y_list)
 
-    sort_indices = np.lexsort((X[:, 0], X[:, -1], X[:, -2]))  # sort by time, sigma, bundle
+    sort_indices = np.lexsort((X[:, 0], X[:, -1], X[:, -2]))
     X_sorted = X[sort_indices]
     y_sorted = y[sort_indices]
 

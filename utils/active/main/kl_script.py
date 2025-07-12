@@ -31,10 +31,12 @@ def read_mahalanobis(segment_dir):
     if os.path.exists(path):
         try:
             vals = np.loadtxt(path)
-            return np.max(vals) if vals.size > 0 else np.nan
+            if vals.size == 0:
+                return np.nan, np.nan
+            return np.max(vals), np.mean(vals)
         except:
-            return np.nan
-    return np.nan
+            return np.nan, np.nan
+    return np.nan, np.nan
 
 def estimate_data_size(bundle_file):
     try:
@@ -65,8 +67,6 @@ def main():
             continue
         stride_minutes = int(match.group(1))
         runtime = read_runtime(stride_minutes)
-
-        # ✅ Reference the right bundle file inside the stride directory
         bundle_file = os.path.join(stride_dir, f"bundle_data_{stride_minutes}min.pkl")
         est_data_size = estimate_data_size(bundle_file)
 
@@ -90,7 +90,7 @@ def main():
             max_tr_sigma = extract_max_position_trace(cov_sigma)
             max_tr_mc = extract_max_position_trace(cov_mc)
             cov_ratio = max_tr_sigma / max_tr_mc if max_tr_mc > 1e-12 else np.nan
-            max_mahal = read_mahalanobis(segment_dir)
+            max_mahal, mean_mahal = read_mahalanobis(segment_dir)
 
             row = {
                 "stride_minutes": stride_minutes,
@@ -103,6 +103,7 @@ def main():
                 "max_tr_mc": max_tr_mc,
                 "cov_ratio": cov_ratio,
                 "max_mahalanobis": max_mahal,
+                "mean_mahalanobis": mean_mahal,
                 "runtime_sec": runtime,
                 "estimated_data_size": est_data_size
             }
@@ -112,7 +113,6 @@ def main():
                 grouped_by_stride[stride_minutes] = {}
             grouped_by_stride[stride_minutes][label] = row
 
-    # === Score and select best stride ===
     best_stride = None
     best_score = float("inf")
     scored_rows = []
@@ -122,33 +122,37 @@ def main():
             continue
         max_row, min_row = segs["max"], segs["min"]
 
-        # Apply hard limits
         if max_row["max_KL"] > 0.2 or min_row["max_KL"] > 0.2:
             continue
         if max_row["max_tr_sigma"] > 2.0 or min_row["max_tr_sigma"] > 2.0:
             continue
 
+        max_kl = max(max_row["max_KL"], min_row["max_KL"])
         mean_kl = max(max_row["mean_KL"], min_row["mean_KL"])
         max_cov = max(max_row["max_tr_sigma"], min_row["max_tr_sigma"])
         cov_mismatch = abs(np.log(max_row["cov_ratio"] * min_row["cov_ratio"]))
         max_mahal = max(max_row["max_mahalanobis"], min_row["max_mahalanobis"])
+        mean_mahal = max(max_row["mean_mahalanobis"], min_row["mean_mahalanobis"])
         data_size = max(max_row["estimated_data_size"], min_row["estimated_data_size"])
 
-        # Score: lower is better
         score = (
+            0.5 * max_kl +
             1.0 * mean_kl +
             8.0 * max_cov +
             1.0 * cov_mismatch +
             1.5 * max_mahal +
-            1e-9 * data_size  # prioritize small size with a soft weight
+            0.5 * mean_mahal +
+            1e-9 * data_size
         )
 
         scored_rows.append({
             "stride_minutes": stride,
             "mean_KL": mean_kl,
+            "max_KL": max_kl,
             "max_cov": max_cov,
             "cov_mismatch": cov_mismatch,
             "max_mahalanobis": max_mahal,
+            "mean_mahalanobis": mean_mahal,
             "estimated_data_size": data_size,
             "score": score
         })
@@ -157,7 +161,6 @@ def main():
             best_score = score
             best_stride = stride
 
-    # Save summary CSVs
     summary_rows.sort(key=lambda x: (x["stride_minutes"], x["segment"]))
     fieldnames = list(summary_rows[0].keys()) if summary_rows else []
 
@@ -169,8 +172,8 @@ def main():
 
     with open("kl_score_summary.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=[
-            "stride_minutes", "mean_KL", "max_cov", "cov_mismatch",
-            "max_mahalanobis", "estimated_data_size", "score"
+            "stride_minutes", "mean_KL", "max_KL", "max_cov", "cov_mismatch",
+            "max_mahalanobis", "mean_mahalanobis", "estimated_data_size", "score"
         ])
         writer.writeheader()
         for row in scored_rows:

@@ -154,7 +154,7 @@ def main():
             mc_traj, P_mc, mu_mc, _, _ = generate_monte_carlo_trajectories_parallel(
                 backTspan, time_steps, 2, 1,
                 sigmas_combined, lam0, mu, F, c, m0, g0,
-                num_samples=500, num_workers=os.cpu_count()
+                num_samples=1000, num_workers=os.cpu_count()
             )
 
             P_sigma = P_sigma_list[0]
@@ -165,8 +165,13 @@ def main():
             np.savetxt(f"{out_dir}/cov_sigma_final.txt", P_sigma[0, -1], fmt="%.6f")
             np.savetxt(f"{out_dir}/cov_mc_final.txt", P_mc[0, 0, -1], fmt="%.6f")
 
-            sigma0_rows = X_sigma[(X_sigma[:, -2] == 0) & (X_sigma[:, -1] == 0)]
-            mee_final = sigma0_rows[-1, 1:8]
+            final_time = forwardTspan[idx+1]
+            mask = np.isclose(X_sigma[:, 0], final_time) & (X_sigma[:, -2] == 0) & (X_sigma[:, -1] == 0) & np.all(X_sigma[:, 8:15] == 0, axis=1)
+            if not np.any(mask):
+                print(f"[WARN] No appended sigma₀ row found for {label} at t = {final_time:.6f}")
+                continue
+            row = X_sigma[mask][0]
+            mee_final = row[1:8]
             r, v = mee2rv(*mee_final[:6], mu)
             sigma0_final = np.hstack((r, v, [mee_final[6]]))
             P_final = P_sigma[0, -1][:7, :7]
