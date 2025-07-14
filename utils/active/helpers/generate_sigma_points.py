@@ -3,7 +3,7 @@ from filterpy.kalman import MerweScaledSigmaPoints
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 
-# Moved to top-level for multiprocessing
+# Top-level bundle sigma generator (parallel-safe)
 def _generate_sigma_points_for_bundle(i, nsd, time_steps, P_combined, r_bundles, v_bundles, mass_bundles, alpha, beta, kappa):
     weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
     num_points = len(time_steps)
@@ -21,7 +21,7 @@ def _generate_sigma_points_for_bundle(i, nsd, time_steps, P_combined, r_bundles,
 
 def generate_sigma_points(nsd=None, alpha=None, beta=None, kappa=None,
                           P_pos=None, P_vel=None, P_mass=None,
-                          time_steps=None,  # <-- Updated: pass this in explicitly
+                          time_steps=None,
                           r_bundles=None, v_bundles=None, mass_bundles=None,
                           num_workers=4):
     if kappa is None:
@@ -51,5 +51,6 @@ def generate_sigma_points(nsd=None, alpha=None, beta=None, kappa=None,
         ))
 
     sigmas_combined = np.stack(results, axis=0)
+
     weights = MerweScaledSigmaPoints(nsd, alpha=alpha, beta=beta, kappa=kappa)
     return sigmas_combined, P_combined, time_steps, len(time_steps), weights.Wm, weights.Wc

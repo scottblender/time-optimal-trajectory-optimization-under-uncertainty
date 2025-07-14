@@ -70,7 +70,8 @@ def main():
         bundle_file = os.path.join(stride_dir, f"bundle_data_{stride_minutes}min.pkl")
         est_data_size = estimate_data_size(bundle_file)
 
-        for segment_dir in glob(os.path.join(stride_dir, "segment_*")):
+        segment_dirs = glob(os.path.join(stride_dir, "segment_*_bundle_*"))
+        for segment_dir in segment_dirs:
             kl_path = os.path.join(segment_dir, "kl_divergence.txt")
             sig_path = os.path.join(segment_dir, "cov_sigma_final.txt")
             mc_path = os.path.join(segment_dir, "cov_mc_final.txt")
@@ -83,8 +84,15 @@ def main():
                 print(f"[WARN] Failed to load {kl_path}: {e}")
                 continue
 
-            label = "max" if "max" in segment_dir else "min"
+            name_match = re.search(r"segment_(max|min)_(farthest|closest)_bundle", segment_dir)
+            if not name_match:
+                print(f"[WARN] Could not parse segment label in: {segment_dir}")
+                continue
+
+            seg_type, mode = name_match.groups()
+            segment_id = f"{seg_type}_{mode}"
             bundle_idx = extract_bundle_idx(segment_dir)
+
             cov_sigma = np.loadtxt(sig_path) if os.path.exists(sig_path) else np.full((7, 7), np.nan)
             cov_mc = np.loadtxt(mc_path) if os.path.exists(mc_path) else np.full((7, 7), np.nan)
             max_tr_sigma = extract_max_position_trace(cov_sigma)
@@ -94,7 +102,7 @@ def main():
 
             row = {
                 "stride_minutes": stride_minutes,
-                "segment": label,
+                "segment": segment_id,
                 "bundle_idx": bundle_idx,
                 "max_KL": np.max(kl_vals),
                 "mean_KL": np.mean(kl_vals),
@@ -111,29 +119,32 @@ def main():
             summary_rows.append(row)
             if stride_minutes not in grouped_by_stride:
                 grouped_by_stride[stride_minutes] = {}
-            grouped_by_stride[stride_minutes][label] = row
+            grouped_by_stride[stride_minutes][segment_id] = row
 
     best_stride = None
     best_score = float("inf")
     scored_rows = []
 
+    required_segments = ["max_farthest", "max_closest", "min_farthest", "min_closest"]
+
     for stride, segs in grouped_by_stride.items():
-        if "max" not in segs or "min" not in segs:
-            continue
-        max_row, min_row = segs["max"], segs["min"]
-
-        if max_row["max_KL"] > 0.2 or min_row["max_KL"] > 0.2:
-            continue
-        if max_row["max_tr_sigma"] > 2.0 or min_row["max_tr_sigma"] > 2.0:
+        if not all(seg in segs for seg in required_segments):
             continue
 
-        max_kl = max(max_row["max_KL"], min_row["max_KL"])
-        mean_kl = max(max_row["mean_KL"], min_row["mean_KL"])
-        max_cov = max(max_row["max_tr_sigma"], min_row["max_tr_sigma"])
-        cov_mismatch = abs(np.log(max_row["cov_ratio"] * min_row["cov_ratio"]))
-        max_mahal = max(max_row["max_mahalanobis"], min_row["max_mahalanobis"])
-        mean_mahal = max(max_row["mean_mahalanobis"], min_row["mean_mahalanobis"])
-        data_size = max(max_row["estimated_data_size"], min_row["estimated_data_size"])
+        # Pull all four
+        rows = [segs[seg] for seg in required_segments]
+
+        # Filter out any disqualifying KL or covariance trace
+        if any(row["max_KL"] > 0.2 or row["max_tr_sigma"] > 2.0 for row in rows):
+            continue
+
+        max_kl = max(row["max_KL"] for row in rows)
+        mean_kl = max(row["mean_KL"] for row in rows)
+        max_cov = max(row["max_tr_sigma"] for row in rows)
+        cov_mismatch = max(abs(np.log(row["cov_ratio"])) for row in rows if row["cov_ratio"] > 0)
+        max_mahal = max(row["max_mahalanobis"] for row in rows)
+        mean_mahal = max(row["mean_mahalanobis"] for row in rows)
+        data_size = max(row["estimated_data_size"] for row in rows)
 
         score = (
             0.5 * max_kl +
@@ -161,6 +172,7 @@ def main():
             best_score = score
             best_stride = stride
 
+    # === Write full segment-wise summary ===
     summary_rows.sort(key=lambda x: (x["stride_minutes"], x["segment"]))
     fieldnames = list(summary_rows[0].keys()) if summary_rows else []
 
@@ -170,6 +182,7 @@ def main():
         for row in summary_rows:
             writer.writerow(row)
 
+    # === Write stride score summary ===
     with open("kl_score_summary.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=[
             "stride_minutes", "mean_KL", "max_KL", "max_cov", "cov_mismatch",

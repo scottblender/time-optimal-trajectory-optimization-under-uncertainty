@@ -1,3 +1,4 @@
+# [Imports unchanged...]
 import os
 import sys
 import time
@@ -93,6 +94,7 @@ def main():
         mu, F, c, m0, g0 = data["mu"], data["F"], data["c"], data["m0"], data["g0"]
         num_bundles = r_b.shape[2]
 
+        # === Nominal vs bundle plots ===
         for name, include_bundles in [("bundle_vs_nominal_trajectories", True), ("nominal_only_trajectory", False)]:
             fig = plt.figure(figsize=(6.5, 5.5))
             ax = fig.add_subplot(111, projection='3d')
@@ -109,6 +111,7 @@ def main():
             plt.savefig(f"{out_root}/{name}.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
             plt.close()
 
+        # === Segment width computation ===
         widths = []
         for t in range(r_b.shape[0]):
             points = r_b[t].T
@@ -130,91 +133,99 @@ def main():
 
         for label, idx in [("max", max_t_idx), ("min", min_t_idx)]:
             dists = np.linalg.norm(r_b[idx] - r_tr[idx][:, np.newaxis], axis=0)
-            bundle_idx = int(np.argmax(dists) if label == "max" else np.argmin(dists))
-            r0 = r_b[:, :, bundle_idx][:, :, np.newaxis]
-            v0 = v_b[:, :, bundle_idx][:, :, np.newaxis]
-            m0s = m_b[:, bundle_idx][:, np.newaxis]
-            lam0 = lam_b[:, :, bundle_idx][:, :, np.newaxis]
-            time_steps = np.array([idx, idx + 1])
-            out_dir = f"{out_root}/segment_{label}_bundle_{bundle_idx}"
-            os.makedirs(out_dir, exist_ok=True)
+            bundle_farthest = int(np.argmax(dists))
+            bundle_closest = int(np.argmin(dists))
 
-            sigmas_combined, _, _, _, Wm, Wc = generate_sigma_points.generate_sigma_points(
-                nsd=7, alpha=np.sqrt(9 / (7 + (3 - 7))), beta=2, kappa=(3 - 7),
-                P_pos=np.eye(3)*0.01, P_vel=np.eye(3)*0.0001, P_mass=np.array([[0.0001]]),
-                time_steps=time_steps, r_bundles=r0, v_bundles=v0, mass_bundles=m0s,
-                num_workers=os.cpu_count()
-            )
+            for mode, bundle_idx in [("farthest", bundle_farthest), ("closest", bundle_closest)]:
+                print(f"[INFO] {label.upper()} segment — {mode} bundle idx = {bundle_idx}")
+                r0 = r_b[:, :, bundle_idx][:, :, np.newaxis]
+                v0 = v_b[:, :, bundle_idx][:, :, np.newaxis]
+                m0s = m_b[:, bundle_idx][:, np.newaxis]
+                lam0 = lam_b[:, :, bundle_idx][:, :, np.newaxis]
+                time_steps = np.array([idx, idx + 1])
+                global_bundle_indices = [bundle_idx]
+                out_dir = f"{out_root}/segment_{label}_{mode}_bundle_{bundle_idx}"
+                os.makedirs(out_dir, exist_ok=True)
 
-            traj, P_sigma_list, mu_sigma_list, X_sigma, _ = solve_trajectories_with_covariance_parallel_with_progress(
-                backTspan, time_steps, 2, 1,
-                sigmas_combined, lam0, m0s, mu, F, c, m0, g0, Wm, Wc, num_workers=os.cpu_count()
-            )
+                sigmas_combined, _, _, _, Wm, Wc = generate_sigma_points.generate_sigma_points(
+                    nsd=7, alpha=np.sqrt(9 / (7 + (3 - 7))), beta=2, kappa=(3 - 7),
+                    P_pos=np.eye(3)*0.01, P_vel=np.eye(3)*0.0001, P_mass=np.array([[0.0001]]),
+                    time_steps=time_steps, r_bundles=r0, v_bundles=v0, mass_bundles=m0s,
+                    num_workers=os.cpu_count()
+                )
 
-            mc_traj, P_mc, mu_mc, _, _ = generate_monte_carlo_trajectories_parallel(
-                backTspan, time_steps, 2, 1,
-                sigmas_combined, lam0, mu, F, c, m0, g0,
-                num_samples=1000, num_workers=os.cpu_count()
-            )
+                traj, P_sigma_list, mu_sigma_list, X_sigma, _ = solve_trajectories_with_covariance_parallel_with_progress(
+                    backTspan, time_steps, 2,
+                    sigmas_combined, lam0, m0s, mu, F, c, m0, g0, Wm, Wc,
+                    global_bundle_indices=global_bundle_indices,
+                    num_workers=os.cpu_count()
+                )
 
-            P_sigma = P_sigma_list[0]
-            mu_sigma = mu_sigma_list[0]
-            kl_vals = [compute_kl_divergence(mu_sigma[0, t], P_sigma[0, t], mu_mc[0, 0, t], P_mc[0, 0, t])
-                       for t in range(P_sigma.shape[1])]
-            np.savetxt(f"{out_dir}/kl_divergence.txt", kl_vals, fmt="%.6f")
-            np.savetxt(f"{out_dir}/cov_sigma_final.txt", P_sigma[0, -1], fmt="%.6f")
-            np.savetxt(f"{out_dir}/cov_mc_final.txt", P_mc[0, 0, -1], fmt="%.6f")
+                mc_traj, P_mc, mu_mc, _, _ = generate_monte_carlo_trajectories_parallel(
+                    backTspan, time_steps, 2,
+                    sigmas_combined, lam0, mu, F, c, m0, g0,
+                    global_bundle_indices=global_bundle_indices,
+                    num_samples=1000, num_workers=os.cpu_count()
+                )
 
-            final_time = forwardTspan[idx+1]
-            mask = np.isclose(X_sigma[:, 0], final_time) & (X_sigma[:, -2] == 0) & (X_sigma[:, -1] == 0) & np.all(X_sigma[:, 8:15] == 0, axis=1)
-            if not np.any(mask):
-                print(f"[WARN] No appended sigma₀ row found for {label} at t = {final_time:.6f}")
-                continue
-            row = X_sigma[mask][0]
-            mee_final = row[1:8]
-            r, v = mee2rv(*mee_final[:6], mu)
-            sigma0_final = np.hstack((r, v, [mee_final[6]]))
-            P_final = P_sigma[0, -1][:7, :7]
-            trajs = [np.concatenate([seg[i] for seg in traj[0]], axis=0) for i in range(len(traj[0][0]))]
-            mahal = [np.sqrt((x[-1, :7] - sigma0_final) @ inv(P_final + 1e-10*np.eye(7)) @ (x[-1, :7] - sigma0_final)) for x in trajs[1:]]
-            np.savetxt(f"{out_dir}/mahalanobis_distances.txt", mahal, fmt="%.6f")
+                P_sigma = P_sigma_list[0]
+                mu_sigma = mu_sigma_list[0]
+                kl_vals = [compute_kl_divergence(mu_sigma[0, t], P_sigma[0, t], mu_mc[0, 0, t], P_mc[0, 0, t])
+                           for t in range(P_sigma.shape[1])]
+                np.savetxt(f"{out_dir}/kl_divergence.txt", kl_vals, fmt="%.6f")
+                np.savetxt(f"{out_dir}/cov_sigma_final.txt", P_sigma[0, -1], fmt="%.6f")
+                np.savetxt(f"{out_dir}/cov_mc_final.txt", P_mc[0, 0, -1], fmt="%.6f")
 
-            fig = plt.figure(figsize=(6.5, 5.5))
-            ax = fig.add_subplot(111, projection='3d')
-            for i in range(len(traj[0][0])):
-                full = np.concatenate([seg[i] for seg in traj[0]], axis=0)
-                r = full[:, :3]
-                ax.plot(r[:, 0], r[:, 1], r[:, 2],
-                        color='black' if i == 0 else 'gray',
-                        linestyle='-' if i == 0 else '--',
-                        lw=2.2 if i == 0 else 0.8, alpha=1.0, zorder=5 if i==0 else 4)
-                ax.scatter(r[0, 0], r[0, 1], r[0, 2], color='black', marker='o', s=10, zorder=1)
-                ax.scatter(r[-1, 0], r[-1, 1], r[-1, 2], color='black', marker='X', s=10, zorder=1)
+                final_time = forwardTspan[idx + 1]
+                mask = np.isclose(X_sigma[:, 0], final_time) & (X_sigma[:, -2] == bundle_idx) & (X_sigma[:, -1] == 0) & np.all(X_sigma[:, 8:15] == 0, axis=1)
+                if not np.any(mask):
+                    print(f"[WARN] No appended sigma₀ row found for {label}/{mode} at t = {final_time:.6f}")
+                    continue
+                row = X_sigma[mask][0]
+                mee_final = row[1:8]
+                r, v = mee2rv(*mee_final[:6], mu)
+                sigma0_final = np.hstack((r, v, [mee_final[6]]))
+                P_final = P_sigma[0, -1][:7, :7]
+                trajs = [np.concatenate([seg[i] for seg in traj[0]], axis=0) for i in range(len(traj[0][0]))]
+                mahal = [np.sqrt((x[-1, :7] - sigma0_final) @ inv(P_final + 1e-10*np.eye(7)) @ (x[-1, :7] - sigma0_final)) for x in trajs[1:]]
+                np.savetxt(f"{out_dir}/mahalanobis_distances.txt", mahal, fmt="%.6f")
 
-            plot_3sigma_ellipsoid(ax, mu_sigma[0, 0, :3], P_sigma[0, 0, :3, :3])
-            plot_3sigma_ellipsoid(ax, mu_sigma[0, -1, :3], P_sigma[0, -1, :3, :3])
+                fig = plt.figure(figsize=(6.5, 5.5))
+                ax = fig.add_subplot(111, projection='3d')
+                for i in range(len(traj[0][0])):
+                    full = np.concatenate([seg[i] for seg in traj[0]], axis=0)
+                    r = full[:, :3]
+                    ax.plot(r[:, 0], r[:, 1], r[:, 2],
+                            color='black' if i == 0 else 'gray',
+                            linestyle='-' if i == 0 else '--',
+                            lw=2.2 if i == 0 else 0.8, alpha=1.0, zorder=5 if i==0 else 4)
+                    ax.scatter(r[0, 0], r[0, 1], r[0, 2], color='black', marker='o', s=10, zorder=1)
+                    ax.scatter(r[-1, 0], r[-1, 1], r[-1, 2], color='black', marker='X', s=10, zorder=1)
 
-            for j in range(0, len(mc_traj[0][0]), 5):
-                full_mc = np.concatenate([seg[j] for seg in mc_traj[0]], axis=0)
-                ax.plot(full_mc[:, 0], full_mc[:, 1], full_mc[:, 2], linestyle=':', color='dimgray', lw=0.8, alpha=0.4, zorder=3)
-                ax.scatter(full_mc[0, 0], full_mc[0, 1], full_mc[0, 2], color='0.4', s=8, marker='o', alpha=0.3,zorder=1)
-                ax.scatter(full_mc[-1, 0], full_mc[-1, 1], full_mc[-1, 2], color='0.4', s=8, marker='X', alpha=0.3,zorder=1)
+                plot_3sigma_ellipsoid(ax, mu_sigma[0, 0, :3], P_sigma[0, 0, :3, :3])
+                plot_3sigma_ellipsoid(ax, mu_sigma[0, -1, :3], P_sigma[0, -1, :3, :3])
 
-            ax.set_xlabel('X [km]')
-            ax.set_ylabel('Y [km]')
-            ax.set_zlabel('Z [km]')
-            set_axes_equal(ax)
-            ax.legend(handles=[
-                Line2D([0], [0], color='black', lw=2.2, label='Nominal (σ₀)'),
-                Line2D([0], [0], color='gray', lw=0.8, linestyle='--', label='Sigma Points'),
-                Line2D([0], [0], color='0.4', lw=0.6, linestyle=':', label='Monte Carlo'),
-                Line2D([0], [0], marker='o', color='black', linestyle='', label='Start', markersize=4),
-                Line2D([0], [0], marker='X', color='black', linestyle='', label='End', markersize=5),
-                Patch(facecolor='0.5', edgecolor='0.5', alpha=0.2, label='3-σ Ellipsoid')
-            ], loc='upper left', bbox_to_anchor=(0.03, 0.95), fontsize=8, frameon=True, facecolor='white')
-            plt.grid(True)
-            plt.savefig(f"{out_dir}/sigma_mc_comparison.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
-            plt.close()
+                for j in range(0, len(mc_traj[0][0]), 5):
+                    full_mc = np.concatenate([seg[j] for seg in mc_traj[0]], axis=0)
+                    ax.plot(full_mc[:, 0], full_mc[:, 1], full_mc[:, 2], linestyle=':', color='dimgray', lw=0.8, alpha=0.4, zorder=3)
+                    ax.scatter(full_mc[0, 0], full_mc[0, 1], full_mc[0, 2], color='0.4', s=8, marker='o', alpha=0.3,zorder=1)
+                    ax.scatter(full_mc[-1, 0], full_mc[-1, 1], full_mc[-1, 2], color='0.4', s=8, marker='X', alpha=0.3,zorder=1)
+
+                ax.set_xlabel('X [km]')
+                ax.set_ylabel('Y [km]')
+                ax.set_zlabel('Z [km]')
+                set_axes_equal(ax)
+                ax.legend(handles=[
+                    Line2D([0], [0], color='black', lw=2.2, label='Nominal (σ₀)'),
+                    Line2D([0], [0], color='gray', lw=0.8, linestyle='--', label='Sigma Points'),
+                    Line2D([0], [0], color='0.4', lw=0.6, linestyle=':', label='Monte Carlo'),
+                    Line2D([0], [0], marker='o', color='black', linestyle='', label='Start', markersize=4),
+                    Line2D([0], [0], marker='X', color='black', linestyle='', label='End', markersize=5),
+                    Patch(facecolor='0.5', edgecolor='0.5', alpha=0.2, label='3-σ Ellipsoid')
+                ], loc='upper left', bbox_to_anchor=(0.03, 0.95), fontsize=8, frameon=True, facecolor='white')
+                plt.grid(True)
+                plt.savefig(f"{out_dir}/sigma_mc_comparison.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
+                plt.close()
 
         runtime = time.time() - start_time
         with open(f"{out_root}/runtime.txt", "w") as f:

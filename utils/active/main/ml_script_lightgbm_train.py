@@ -14,7 +14,10 @@ with open("stride_4000min/bundle_segment_widths.txt") as f:
     time_vals = times_arr[:, 0]
 
     max_idx = int(np.argmax(times_arr[:, 1]))
-    min_idx = int(np.argmin(times_arr[:, 1]))
+    min_idx = int(np.argmin(times_arr[:, 1])) - 1
+    if min_idx == len(times_arr) - 1:
+        sorted_indices = np.argsort(times_arr[:, 1])
+        min_idx = sorted_indices[1]
 
     t_max_neighbors = time_vals[max(0, max_idx - 1): max_idx + 2]
     t_min_neighbors = time_vals[max(0, min_idx - 1): min_idx + 2]
@@ -66,6 +69,21 @@ y_max = np.vstack(y_max)
 X_min = np.vstack(X_min)
 y_min = np.vstack(y_min)
 
+# === Verify all 50 bundles are present before training ===
+expected_total_bundles = 50
+
+bundles_max = np.unique(X_max[:, -2]).astype(int)
+missing_max = set(range(expected_total_bundles)) - set(bundles_max)
+if missing_max:
+    raise ValueError(f"[ERROR] segment_max is missing bundle indices: {sorted(missing_max)}")
+
+bundles_min = np.unique(X_min[:, -2]).astype(int)
+missing_min = set(range(expected_total_bundles)) - set(bundles_min)
+if missing_min:
+    raise ValueError(f"[ERROR] segment_min is missing bundle indices: {sorted(missing_min)}")
+
+print("[SUCCESS] Both segment_max and segment_min include all 50 bundles.")
+
 # === Train LightGBM model ===
 print("[INFO] Training LightGBM model...")
 base_model = LGBMRegressor(n_estimators=300, max_depth=10, learning_rate=0.03, verbose=1)
@@ -78,5 +96,6 @@ joblib.dump(Wm, "Wm.pkl")
 joblib.dump(Wc, "Wc.pkl")
 joblib.dump({"X": X_max, "y": y_max}, "segment_max.pkl")
 joblib.dump({"X": X_min, "y": y_min}, "segment_min.pkl")
+
 print("[INFO] Model and segment data saved.")
 print(f"[INFO] Elapsed time: {time.time() - start:.2f} sec")

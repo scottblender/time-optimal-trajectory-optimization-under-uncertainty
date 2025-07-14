@@ -7,7 +7,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'h
 import generate_sigma_points
 from solve_trajectories import solve_trajectories_with_covariance_parallel_with_progress
 
-
 def main():
     print("Loading bundle data...")
     stride_minutes = 4000
@@ -37,6 +36,8 @@ def main():
 
     for batch_start in range(0, num_bundles, batch_size):
         batch_end = min(batch_start + batch_size, num_bundles)
+        global_bundle_indices = list(range(batch_start, batch_end))
+
         print(f"\n=== Running baseline | Bundles {batch_start} to {batch_end - 1} ===")
 
         r_batch = r_bundles[:, :, batch_start:batch_end]
@@ -57,9 +58,10 @@ def main():
         )
 
         trajectories, P_hist, means_hist, X, y = solve_trajectories_with_covariance_parallel_with_progress(
-            backTspan, full_time_steps, num_time_steps_full, batch_end - batch_start,
+            backTspan, full_time_steps, num_time_steps_full,
             sigmas_combined, lam_batch, m_batch,
             mu, F, c, m0, g0, Wm, Wc,
+            global_bundle_indices=global_bundle_indices,
             num_workers=os.cpu_count()
         )
 
@@ -67,13 +69,26 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
         joblib.dump({"X": X, "y": y, "Wm": Wm, "Wc": Wc}, os.path.join(out_dir, "data.pkl"))
         print(f"Saved: {out_dir}/data.pkl")
-        
+
         # === Check output integrity ===
         sigma0_rows = X[(X[:, -1] == 0) & np.all(np.abs(X[:, 8:15]) < 1e-12, axis=1)]
-        expected = (num_time_steps_full - 1) * (batch_end - batch_start)  # One appended row per segment per bundle
+        expected = (num_time_steps_full - 1) * len(global_bundle_indices)
         print(f"[CHECK] Found {len(sigma0_rows)} appended sigma₀ rows (expected {expected})")
         if len(sigma0_rows) != expected:
             print("[WARN] Some sigma₀ rows may be missing.")
+
+        # === Check bundle indices in X ===
+        bundle_ids_in_X = set(np.unique(X[:, -2]).astype(int))
+        expected_ids = set(global_bundle_indices)
+        missing = expected_ids - bundle_ids_in_X
+        extra = bundle_ids_in_X - expected_ids
+
+        if missing:
+            print(f"[ERROR] Missing bundle indices in X: {sorted(missing)}")
+        if extra:
+            print(f"[WARN] Unexpected bundle indices in X: {sorted(extra)}")
+        if not missing and not extra:
+            print("[CHECK] Bundle indices in X match expected global indices.")
 
     print("\nAll baseline batches completed.")
 

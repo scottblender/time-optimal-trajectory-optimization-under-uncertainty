@@ -8,7 +8,6 @@ from rv2mee import rv2mee
 from mee2rv import mee2rv
 from odefunc import odefunc
 
-
 def sample_within_bounds(mean, cov, max_tries=100):
     for _ in range(max_tries):
         sample = np.random.multivariate_normal(mean, cov)
@@ -16,7 +15,6 @@ def sample_within_bounds(mean, cov, max_tries=100):
         if np.all(z <= 3):
             return sample
     return mean
-
 
 def listener(q, total):
     with tqdm(total=total, desc="Monte Carlo progress") as pbar:
@@ -30,10 +28,9 @@ def listener(q, total):
                 completed += 1
                 pbar.write("[WARN] Subprocess failed")
 
-
 def _solve_mc_single_bundle(args):
-    (bundle_idx, time_steps, num_time_steps, sigmas_combined, new_lam_bundles,
-     mu, F, c, m0, g0, num_samples, P_init, P_control, backTspan, queue) = args
+    (bundle_idx_global, time_steps, num_time_steps, sigmas_combined, new_lam_bundles,
+     mu, F, c, m0, g0, num_samples, P_init, P_control, backTspan, queue, bundle_idx_local) = args
 
     try:
         forwardTspan = backTspan[::-1]
@@ -44,11 +41,11 @@ def _solve_mc_single_bundle(args):
         num_segments = num_time_steps - 1
         total_steps = num_samples * steps_per_segment * num_segments
 
-        X_rows = np.zeros((total_steps, 7))    # MEE state
-        y_rows = np.zeros((total_steps, 7))    # control
-        cov_rows = np.zeros((total_steps, 7))  # diag(P)
+        X_rows = np.zeros((total_steps, 7))
+        y_rows = np.zeros((total_steps, 7))
+        cov_rows = np.zeros((total_steps, 7))
         t_rows = np.zeros((total_steps,))
-        b_rows = np.full((total_steps,), bundle_idx)
+        b_rows = np.full((total_steps,), bundle_idx_global)
         s_rows = np.zeros((total_steps,))
 
         P_combined_history = []
@@ -59,10 +56,9 @@ def _solve_mc_single_bundle(args):
 
         for j in range(num_segments):
             tstart, tend = time[j], time[j + 1]
-            sigma_state = sigmas_combined[bundle_idx, 0, :, j]
-            lam_nominal = new_lam_bundles[j, :, bundle_idx]
+            sigma_state = sigmas_combined[bundle_idx_local, 0, :, j]
+            lam_nominal = new_lam_bundles[j, :, bundle_idx_local]
             sub_times = np.linspace(tstart, tend, substeps + 1)
-
             cartesian_samples = []
 
             for sample_idx in range(num_samples):
@@ -118,7 +114,6 @@ def _solve_mc_single_bundle(args):
             P_combined = np.einsum("ijk,ijl->jkl", deviations, deviations) / num_samples
             P_diag = np.array([np.diag(np.diag(P)) for P in P_combined])
 
-            # Store only the diagonal covariances at matching indices
             for t in range(P_diag.shape[0]):
                 if row_idx - P_diag.shape[0] + t < total_steps:
                     cov_rows[row_idx - P_diag.shape[0] + t] = np.diag(P_diag[t])
@@ -140,11 +135,10 @@ def _solve_mc_single_bundle(args):
         traceback.print_exc()
         return None
 
-
 def generate_monte_carlo_trajectories_parallel(
-    backTspan, time_steps, num_time_steps, num_bundles,
+    backTspan, time_steps, num_time_steps,
     sigmas_combined, new_lam_bundles, mu, F, c, m0, g0,
-    num_samples=1000, num_workers=4
+    global_bundle_indices, num_samples=1000, num_workers=4
 ):
     P_pos = np.eye(3) * 0.01
     P_vel = np.eye(3) * 0.0001
@@ -158,7 +152,7 @@ def generate_monte_carlo_trajectories_parallel(
 
     substeps = 10
     evals_per_substep = 20
-    total = num_bundles * (num_time_steps - 1) * num_samples * substeps * evals_per_substep
+    total = len(global_bundle_indices) * (num_time_steps - 1) * num_samples * substeps * evals_per_substep
 
     manager = Manager()
     q = manager.Queue()
@@ -166,9 +160,9 @@ def generate_monte_carlo_trajectories_parallel(
     listener_process.start()
 
     args_list = [
-        (i, time_steps, num_time_steps, sigmas_combined, new_lam_bundles,
-         mu, F, c, m0, g0, num_samples, P_init, P_control, backTspan, q)
-        for i in range(num_bundles)
+        (global_idx, time_steps, num_time_steps, sigmas_combined, new_lam_bundles,
+         mu, F, c, m0, g0, num_samples, P_init, P_control, backTspan, q, local_idx)
+        for local_idx, global_idx in enumerate(global_bundle_indices)
     ]
 
     with Pool(num_workers) as pool:

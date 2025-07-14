@@ -29,8 +29,8 @@ def listener(q, total):
                 pbar.write("[WARN] Subprocess failed")
 
 def _solve_single_bundle(args):
-    (bundle_index, backTspan, time_steps, num_time_steps, sigmas_combined,
-     new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc, progress_queue) = args
+    (bundle_index_global, backTspan, time_steps, num_time_steps, sigmas_combined,
+     new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc, progress_queue, bundle_index_local) = args
 
     try:
         forwardTspan = backTspan[::-1]
@@ -46,17 +46,17 @@ def _solve_single_bundle(args):
         num_segments = num_time_steps - 1
         total_rows = num_sigma * steps_per_segment * num_segments
 
-        X_rows = np.zeros((total_rows, 17))  # [time, MEE(6), mass, diag cov(7), bundle, sigma]
-        y_rows = np.zeros((total_rows, 7))   # control vector
+        X_rows = np.zeros((total_rows, 17))
+        y_rows = np.zeros((total_rows, 7))
         row_idx = 0
         X_extra_rows = []
         y_extra_rows = []
 
         for j in range(num_segments):
             tstart, tend = time[j], time[j + 1]
-            sigma_combined = sigmas_combined[bundle_index, :, :, j]
+            sigma_combined = sigmas_combined[bundle_index_local, :, :, j]
             idx_start = time_steps[j]
-            new_lam = new_lam_bundles[idx_start, :, bundle_index]
+            new_lam = new_lam_bundles[idx_start, :, bundle_index_local]
             P_lam = np.eye(7) * 0.001
             sub_times = np.linspace(tstart, tend, substeps + 1)
 
@@ -109,7 +109,7 @@ def _solve_single_bundle(args):
                         time_values[step],
                         full_states[step, :7],
                         np.zeros(7),
-                        bundle_index,
+                        bundle_index_global,
                         sigma_idx
                     ])
                 row_idx += full_states.shape[0]
@@ -133,15 +133,14 @@ def _solve_single_bundle(args):
                     index = (t * num_sigma) + sigma_idx + (j * num_sigma * steps_per_segment)
                     X_rows[index, 8:15] = cov_diag
 
-            # Append sigma0 at end of this segment (t_{k+1})
-            sigma0_cart = sigmas_combined[bundle_index, 0, :, j + 1]
+            sigma0_cart = sigmas_combined[bundle_index_local, 0, :, j + 1]
             r0 = sigma0_cart[:3].reshape(1, -1)
             v0 = sigma0_cart[3:6].reshape(1, -1)
             m0_val = sigma0_cart[6]
             mee = rv2mee(r0, v0, mu).flatten()
             t_append = time[j + 1]
             lam = new_lam
-            X_extra = np.hstack([t_append, np.hstack((mee, m0_val)), np.zeros(7), bundle_index, 0])
+            X_extra = np.hstack([t_append, np.hstack((mee, m0_val)), np.zeros(7), bundle_index_global, 0])
             y_extra = lam
             X_extra_rows.append(X_extra)
             y_extra_rows.append(y_extra)
@@ -161,19 +160,20 @@ def _solve_single_bundle(args):
     except Exception:
         if progress_queue:
             progress_queue.put(-1)
-        print(f"[ERROR] Bundle {bundle_index} failed:")
+        print(f"[ERROR] Bundle {bundle_index_global} failed:")
         traceback.print_exc()
         return None
 
 def solve_trajectories_with_covariance_parallel_with_progress(
-    backTspan, time_steps, num_time_steps, num_bundles,
-    sigmas_combined, new_lam_bundles, mass_bundles, mu, F, c, m0, g0, Wm, Wc,
-    num_workers=4
+    backTspan, time_steps, num_time_steps,
+    sigmas_combined, new_lam_bundles, mass_bundles,
+    mu, F, c, m0, g0, Wm, Wc,
+    global_bundle_indices, num_workers=4
 ):
     num_sigma = sigmas_combined.shape[1]
     substeps = 10
     evals_per_substep = 20
-    total_steps = num_bundles * (num_time_steps - 1) * num_sigma * substeps * evals_per_substep
+    total_steps = len(global_bundle_indices) * (num_time_steps - 1) * num_sigma * substeps * evals_per_substep
 
     manager = Manager()
     progress_queue = manager.Queue()
@@ -181,9 +181,9 @@ def solve_trajectories_with_covariance_parallel_with_progress(
     listener_process.start()
 
     job_args = [
-        (i, backTspan, time_steps, num_time_steps, sigmas_combined, new_lam_bundles, mass_bundles,
-         mu, F, c, m0, g0, Wm, Wc, progress_queue)
-        for i in range(num_bundles)
+        (global_idx, backTspan, time_steps, num_time_steps, sigmas_combined, new_lam_bundles, mass_bundles,
+         mu, F, c, m0, g0, Wm, Wc, progress_queue, local_idx)
+        for local_idx, global_idx in enumerate(global_bundle_indices)
     ]
 
     with Pool(processes=num_workers) as pool:
