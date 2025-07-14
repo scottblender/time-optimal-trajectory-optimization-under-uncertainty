@@ -4,7 +4,7 @@ import joblib
 import numpy as np
 import time
 from tqdm import tqdm
-from lightgbm import LGBMRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor
 
 # === Load segment times from width file ===
@@ -84,9 +84,9 @@ if missing_min:
 
 print("[SUCCESS] Both segment_max and segment_min include all 50 bundles.")
 
-# === Train LightGBM model ===
-print("[INFO] Training LightGBM model...")
-base_model = LGBMRegressor(n_estimators=300, max_depth=10, learning_rate=0.03, verbose=1)
+# === Train Random Forest model ===
+print("[INFO] Training Random Forest model...")
+base_model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
 model = MultiOutputRegressor(base_model)
 model.fit(X_full[:, :-2], y_full)
 
