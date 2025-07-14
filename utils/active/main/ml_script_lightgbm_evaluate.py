@@ -2,15 +2,15 @@ import os
 import joblib
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor
-from numpy.linalg import inv
-from scipy.integrate import solve_ivp
-from scipy.spatial.distance import mahalanobis
-from sklearn.metrics import mean_squared_error
-from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
+from scipy.integrate import solve_ivp
+from numpy.linalg import inv
+from scipy.spatial.distance import mahalanobis
+from sklearn.metrics import mean_squared_error
+from multiprocessing import Pool, Manager
+from tqdm import tqdm
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
@@ -21,7 +21,7 @@ from odefunc import odefunc
 plt.rcParams.update({'font.size': 8})
 plt.rcParams['axes.grid'] = True
 
-# === Covariance ===
+# Covariance model
 P_pos = np.eye(3) * 0.01
 P_vel = np.eye(3) * 0.0001
 P_mass = np.array([[0.0001]])
@@ -30,6 +30,8 @@ P_init = np.block([
     [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
     [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
 ])
+
+mu, F, c, m0, g0 = 27.899633640439433, 0.33, 4.4246246663455135, 4000, 9.81
 
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12)
@@ -60,8 +62,6 @@ def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.2, scale=3.0):
     ellipsoid = np.stack((x, y, z), axis=-1) @ eigvecs.T + mean
     ax.plot_surface(ellipsoid[...,0], ellipsoid[...,1], ellipsoid[...,2],
                     rstride=1, cstride=1, color=color, alpha=alpha, linewidth=0)
-    ax.plot_wireframe(ellipsoid[...,0], ellipsoid[...,1], ellipsoid[...,2],
-                      rstride=5, cstride=5, color='k', alpha=0.2, linewidth=0.3)
 
 def set_axes_equal(ax):
     xlim, ylim, zlim = ax.get_xlim(), ax.get_ylim(), ax.get_zlim()
@@ -74,93 +74,96 @@ def set_axes_equal(ax):
     ax.set_box_aspect([1.25, 1, 0.75])
 
 def mc_worker(args):
-    sample, init_state_mee, control_profile, segments, mu, F, c, m0, g0 = args
-    r_sample, v_sample = sample[:3], sample[3:6]
-    m_sample = sample[6]
-    r_sample = r_sample.reshape(1, 3)
-    v_sample = v_sample.reshape(1, 3)
-    state_mee = np.hstack([rv2mee(r_sample, v_sample, mu), m_sample])
-    state = state_mee.copy()
-    r_traj = []
-    for i, (t0, t1) in enumerate(segments):
-        lam = control_profile[i]
-        S = np.concatenate([state, lam])
-        sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F, c, m0, g0), [t0, t1], S,
-                        t_eval=np.linspace(t0, t1, 20))
-        r, _ = mee2rv(*sol.y[:6], mu)
-        r_traj.append(r)
-        state = sol.y[:7, -1]
-    return np.vstack(r_traj)
+    index, sample, init_state_mee, control_profile, segments = args
+    try:
+        r_sample, v_sample = sample[:3], sample[3:6]
+        m_sample = sample[6]
+        r_sample = r_sample.reshape(1, 3)
+        v_sample = v_sample.reshape(1, 3)
+        state_mee = np.hstack([rv2mee(r_sample, v_sample, mu), m_sample])
+        r_traj = []
 
-def monte_carlo_propagation_parallel(init_state_mee, control_profile, segments, mu, F, c, m0, g0, num_samples=1000, num_workers=None):
+        for (t0, t1), lam in zip(segments, control_profile):
+            S = np.concatenate([state_mee, lam])
+            t_eval = np.linspace(t0, t1, 20)
+            sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F, c, m0, g0), [t0, t1], S, t_eval=t_eval)
+            r, _ = mee2rv(*sol.y[:6], mu)
+            r_traj.append(r)
+            state_mee = sol.y[:7, -1]
+
+        return np.vstack(r_traj)
+    except Exception as e:
+        return None
+
+def monte_carlo_propagation_pool(init_state_mee, control_profile, segments, num_samples=1000, num_workers=4):
     r0_eci, v0_eci = mee2rv(*[np.array([val]) for val in init_state_mee[:6]], mu)
     m0_val = init_state_mee[6]
     mean_eci = np.hstack([r0_eci.flatten(), v0_eci.flatten(), m0_val])
     samples = np.random.multivariate_normal(mean_eci, P_init, size=num_samples)
-    args_list = [(s, init_state_mee, control_profile, segments, mu, F, c, m0, g0) for s in samples]
-    with ProcessPoolExecutor(max_workers=num_workers) as ex:
-        r_mc = list(tqdm(ex.map(mc_worker, args_list), total=len(args_list), desc="Monte Carlo"))
-    return np.array(r_mc)
+
+    args = [(i, sample, init_state_mee, control_profile, segments) for i, sample in enumerate(samples)]
+    with Pool(processes=num_workers) as pool:
+        results = list(tqdm(pool.imap_unordered(mc_worker, args), total=num_samples, desc="Monte Carlo"))
+
+    return np.array([r for r in results if r is not None])
 
 def evaluate_bundle(args):
     b, X, y, model, Wm, Wc, label = args
-    mu, F, c, m0, g0 = 27.899633640439433, 0.33, 4.4246246663455135, 4000, 9.81
     time_vals = np.unique(X[:, 0])
     segments = list(zip(time_vals[:-1], time_vals[1:]))
     sigma_indices = np.unique(X[:, -1]).astype(int)
     y_pred = model.predict(X[:, :-2])
-    control_profile, r_stack, v_stack = [], [], []
+    control_profile, r_stack = [], []
     init_state = None
 
     for s in sigma_indices:
-        r_sigma, v_sigma = [], []
-        for i, (t0, t1) in enumerate(segments):
+        r_sigma = []
+        for (t0, t1) in segments:
             row = X[(X[:, 0] == t0) & (X[:, -1] == s)][0]
             lam = y_pred[(X[:, 0] == t0) & (X[:, -1] == s)][0]
             S = np.concatenate([row[1:8], lam])
-            sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F, c, m0, g0), [t0, t1], S,
-                            t_eval=np.linspace(t0, t1, 20))
-            r, v = mee2rv(*sol.y[:6], mu)
+            sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F, c, m0, g0),
+                            [t0, t1], S, t_eval=np.linspace(t0, t1, 20))
+            r, _ = mee2rv(*sol.y[:6], mu)
             r_sigma.append(r)
-            v_sigma.append(v)
-            if s == 0 and i == 0:
+            if s == 0 and (t0, t1) == segments[0]:
                 init_state = row[1:8]
             if s == 0:
                 control_profile.append(lam)
         r_stack.append(np.vstack(r_sigma))
-        v_stack.append(np.vstack(v_sigma))
 
     r_stack = np.array(r_stack)
     mean_r = np.sum(Wm[:, None, None] * r_stack, axis=0)
     devs_r = r_stack - mean_r[None, :, :]
     P_diag_r = np.einsum("i,ijk,ijl->jkl", Wc, devs_r, devs_r)
-
     r_pred = r_stack[0]
-    r_mc = monte_carlo_propagation_parallel(init_state, control_profile, segments, mu, F, c, m0, g0)
 
+    r_mc = monte_carlo_propagation_pool(init_state, control_profile, segments, num_samples=1000, num_workers=4)
     mean_mc = np.mean(r_mc, axis=0)
     cov_mc = np.cov(r_mc[:, -1, :].T)
-    kl = compute_kl_divergence(mean_r[-1], P_diag_r[-1], mean_mc[-1], cov_mc)
 
     final_time = time_vals[-1]
     row = X[(X[:, 0] == final_time) & (X[:, -1] == 0) & np.allclose(X[:, 8:15], 0, atol=1e-10)][0]
-    r_ref, v_ref = mee2rv(*row[1:7].reshape(6, 1), mu)
-    r_ref, v_ref = r_ref.flatten(), v_ref.flatten()
+    r_ref, _ = mee2rv(*row[1:7].reshape(6, 1), mu)
+    r_ref = r_ref.flatten()
 
+    kl = compute_kl_divergence(mean_r[-1], P_diag_r[-1], mean_mc[-1], cov_mc)
+
+    # === Plot ===
     out_path = f"outputs/segment_{label}_bundle_{b}/sigma_mc_comparison.pdf"
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     fig = plt.figure(figsize=(6.5, 5.5))
     ax = fig.add_subplot(111, projection='3d')
     for i in range(len(r_stack)):
         r = r_stack[i]
         ax.plot(r[:, 0], r[:, 1], r[:, 2], color='black' if i==0 else 'gray',
-                linestyle='-' if i==0 else '--', lw=2.2 if i==0 else 0.8, alpha=1.0)
+                linestyle='-' if i==0 else '--', lw=2.2 if i==0 else 0.8)
     for i in range(0, len(r_mc), 10):
-        ax.plot(r_mc[i][:,0], r_mc[i][:,1], r_mc[i][:,2], linestyle=':', color='dimgray', lw=0.8, alpha=0.4)
-    plot_3sigma_ellipsoid(ax, mean_r[0], P_diag_r[0][:3,:3])
-    plot_3sigma_ellipsoid(ax, mean_r[-1], P_diag_r[-1][:3,:3])
-    ax.set_xlabel("X [km]"); ax.set_ylabel("Y [km]"); ax.set_zlabel("Z [km]")
+        ax.plot(r_mc[i][:, 0], r_mc[i][:, 1], r_mc[i][:, 2], linestyle=':', color='dimgray', lw=0.6, alpha=0.4)
+    plot_3sigma_ellipsoid(ax, mean_r[0], P_diag_r[0][:3, :3])
+    plot_3sigma_ellipsoid(ax, mean_r[-1], P_diag_r[-1][:3, :3])
+    ax.set_xlabel("X"); ax.set_ylabel("Y"); ax.set_zlabel("Z")
     set_axes_equal(ax)
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, dpi=600, bbox_inches='tight')
     plt.close()
 
@@ -180,8 +183,8 @@ def main():
     Wc = joblib.load("Wc.pkl")
     segment_max = joblib.load("segment_max.pkl")
     segment_min = joblib.load("segment_min.pkl")
-
     results = []
+
     for label, data in [("max", segment_max), ("min", segment_min)]:
         args_list = []
         for b in np.unique(data["X"][:, -2]).astype(int):
@@ -189,8 +192,8 @@ def main():
             y_b = data["y"][data["X"][:, -2] == b]
             args_list.append((b, X_b, y_b, model, Wm, Wc, label))
 
-        with ProcessPoolExecutor() as ex:
-            results += list(tqdm(ex.map(evaluate_bundle, args_list), total=len(args_list), desc=f"Evaluating {label}"))
+        with Pool(processes=4) as pool:
+            results += list(tqdm(pool.imap_unordered(evaluate_bundle, args_list), total=len(args_list), desc=f"Bundles {label}")))
 
     df = pd.DataFrame(results)
     df.to_csv("ml_lightgbm_evaluation_results.csv", index=False)
