@@ -4,8 +4,9 @@ import joblib
 import numpy as np
 import time
 from tqdm import tqdm
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor
+from sklearn.preprocessing import StandardScaler
+from lightgbm import LGBMRegressor
 
 # === Load segment times from width file ===
 with open("stride_4000min/bundle_segment_widths.txt") as f:
@@ -84,14 +85,28 @@ if missing_min:
 
 print("[SUCCESS] Both segment_max and segment_min include all 50 bundles.")
 
-# === Train Random Forest model ===
-print("[INFO] Training Random Forest model...")
-base_model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
-model = MultiOutputRegressor(base_model)
-model.fit(X_full[:, :-2], y_full)
+# === Normalize input features ===
+print("[INFO] Normalizing features with StandardScaler...")
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_full[:, :-2])  # Exclude last 2 columns (bundle_idx, sigma_idx)
 
-# === Save model and data ===
+# === Train LightGBM model ===
+print("[INFO] Training LightGBM model...")
+base_model = LGBMRegressor(
+    n_estimators=300,
+    learning_rate=0.03,
+    max_depth=6,
+    num_leaves=20,
+    min_data_in_leaf=20,
+    random_state=42,
+    verbose = 1
+)
+model = MultiOutputRegressor(base_model)
+model.fit(X_scaled, y_full)
+
+# === Save model, scaler, and segment data ===
 joblib.dump(model, "trained_model.pkl")
+joblib.dump(scaler, "scaler.pkl")
 joblib.dump(Wm, "Wm.pkl")
 joblib.dump(Wc, "Wc.pkl")
 joblib.dump({"X": X_max, "y": y_max}, "segment_max.pkl")
