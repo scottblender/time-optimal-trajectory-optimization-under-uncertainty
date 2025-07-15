@@ -48,7 +48,6 @@ def set_axes_equal(ax):
     ax.set_ylim3d([centers[1] - max_range, centers[1] + max_range])
     ax.set_zlim3d([centers[2] - max_range, centers[2] + max_range])
     ax.set_box_aspect([1.25, 1, 0.75])
-    ax.grid(False)
     ax.xaxis.pane.fill = False
     ax.yaxis.pane.fill = False
     ax.zaxis.pane.fill = False
@@ -169,6 +168,14 @@ def main():
                 )
 
                 P_sigma = P_sigma_list[0]
+                # === Debug print to compare sigma covariance at segment start ===
+                P_init_diag = np.array([0.01, 0.01, 0.01])
+                P_sigma_start_diag = np.diag(P_sigma[0, 0, :3, :3])
+
+                print(f"[DEBUG] {label.upper()} / {mode} / Bundle {bundle_idx} — Segment Start Covariance Check:")
+                print(f"    Empirical Sigma Cov Diag at t0: {P_sigma_start_diag}")
+                print(f"    Expected P_init Diag:           {P_init_diag}")
+                print(f"    Ratio:                          {P_sigma_start_diag / P_init_diag}")
                 mu_sigma = mu_sigma_list[0]
                 kl_vals = [compute_kl_divergence(mu_sigma[0, t], P_sigma[0, t], mu_mc[0, 0, t], P_mc[0, 0, t])
                            for t in range(P_sigma.shape[1])]
