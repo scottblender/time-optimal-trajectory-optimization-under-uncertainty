@@ -9,6 +9,14 @@ from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMRegressor
 
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
+from mee2rv import mee2rv
+
+# === Constants ===
+mu = 27.8996
+P_pos = np.eye(3) * 0.01
+
 # === Load segment times from width file ===
 with open("stride_4000min/bundle_segment_widths.txt") as f:
     lines = f.readlines()[1:]
@@ -27,7 +35,7 @@ with open("stride_4000min/bundle_segment_widths.txt") as f:
     print(f"[INFO] Max segment times: {t_max_neighbors}")
     print(f"[INFO] Min segment times: {t_min_neighbors}")
 
-# === Initialize containers ===
+# === Init containers ===
 X_all, y_all = [], []
 X_max, y_max, X_min, y_min = [], [], [], []
 Wm, Wc = None, None
@@ -35,36 +43,58 @@ Wm, Wc = None, None
 start = time.time()
 batch_files = sorted(glob.glob("baseline_stride_1/batch_*/data.pkl"))
 
-# === Load and filter data with progress bar ===
 for file in tqdm(batch_files, desc="[INFO] Loading batches"):
     d = joblib.load(file)
     Xb, yb = d["X"], d["y"]
     if Wm is None: Wm, Wc = d["Wm"], d["Wc"]
+
+    # === Covariance check for each bundle
+    bundle_ids = np.unique(Xb[:, -2]).astype(int)
+    for b_idx in bundle_ids:
+        Xb_bundle = Xb[Xb[:, -2] == b_idx]
+        t0 = np.min(Xb_bundle[:, 0])
+        X_t0 = Xb_bundle[np.isclose(Xb_bundle[:, 0], t0)]
+        sigmas = []
+        for s_idx in range(15):
+            matches = X_t0[X_t0[:, -1] == s_idx]
+            if len(matches) == 0: continue
+            sigmas.append(matches[-1])
+        if len(sigmas) != 15:
+            print(f"[WARN] Skipping covariance check: expected 15, got {len(sigmas)}")
+            continue
+        r_all = []
+        for row in sigmas:
+            mee = row[1:8]
+            r, _ = mee2rv(*[np.array([val]) for val in mee[:6]], mu)
+            r_all.append(r.flatten())
+        r_all = np.array(r_all)
+        mean_r = np.sum(Wm[:, None] * r_all, axis=0)
+        cov_r = np.einsum("i,ij,ik->jk", Wc, r_all - mean_r, r_all - mean_r)
+        frob = np.linalg.norm(cov_r - P_pos)
+        print(f"[VERIFY] bundle {int(b_idx)} @ t={t0:.3f}: ||cov - P_pos||_F = {frob:.3e}")
+        if frob < 1e-5:
+            print("         ✅ Position covariance matches expected P_init.")
+        else:
+            print("         ⚠️  Covariance deviates from P_init.")
+
     X_all.append(Xb)
     y_all.append(yb)
 
-    # Exact time match filtering
     for t_extract, X_list, y_list, label in [
         (t_max_neighbors, X_max, y_max, "max"),
         (t_min_neighbors, X_min, y_min, "min")
     ]:
         matched_any = False
         for t in t_extract:
-            mask = np.isclose(Xb[:, 0], t, atol=1e-8)
-            if np.any(mask):
-                X_list.append(Xb[mask])
-                y_list.append(yb[mask])
+            idx = np.round(Xb[:, 0], 6) == np.round(t, 6)
+            if np.any(idx):
+                X_list.append(Xb[idx])
+                y_list.append(yb[idx])
                 matched_any = True
         if not matched_any:
             print(f"[WARN] No data in {file} for {label} times {t_extract}")
 
-# === Check for empty segment data ===
-if not X_max or not y_max:
-    raise ValueError("[ERROR] No data found for max segment times.")
-if not X_min or not y_min:
-    raise ValueError("[ERROR] No data found for min segment times.")
-
-# === Stack all data ===
+# === Stack all data
 X_full = np.vstack(X_all)
 y_full = np.vstack(y_all)
 X_max = np.vstack(X_max)
@@ -72,7 +102,7 @@ y_max = np.vstack(y_max)
 X_min = np.vstack(X_min)
 y_min = np.vstack(y_min)
 
-# === Deduplicate σ-point rows at t₀ (keep last per (t, σ_idx, bundle_idx))
+# === Deduplicate σ-point rows at t₀ (keep last per group)
 df_X = pd.DataFrame(X_full)
 df_y = pd.DataFrame(y_full)
 df_X.columns = ['t', 'p', 'f', 'g', 'h', 'L', 'mass', 'dummy1',
@@ -100,33 +130,25 @@ print(f"  Found {len(unique_times_full)} unique times:")
 print(f"  [{unique_times_full[0]:.6f} ... {unique_times_full[-1]:.6f}]")
 
 print("\n[CHECK] Unique times in X_max:")
-unique_times_max = np.unique(X_max[:, 0])
-print(f"  Found {len(unique_times_max)} unique times:")
-print(f"  {unique_times_max}")
+print(f"  {np.unique(X_max[:, 0])}")
 
 print("\n[CHECK] Unique times in X_min:")
-unique_times_min = np.unique(X_min[:, 0])
-print(f"  Found {len(unique_times_min)} unique times:")
-print(f"  {unique_times_min}")
+print(f"  {np.unique(X_min[:, 0])}")
 
 # === Bundle presence check
 expected_total_bundles = 50
-bundles_max = np.unique(X_max[:, -2]).astype(int)
-missing_max = set(range(expected_total_bundles)) - set(bundles_max)
-if missing_max:
-    raise ValueError(f"[ERROR] segment_max is missing bundle indices: {sorted(missing_max)}")
-
-bundles_min = np.unique(X_min[:, -2]).astype(int)
-missing_min = set(range(expected_total_bundles)) - set(bundles_min)
-if missing_min:
-    raise ValueError(f"[ERROR] segment_min is missing bundle indices: {sorted(missing_min)}")
+for name, X_seg in [("segment_max", X_max), ("segment_min", X_min)]:
+    bundles = np.unique(X_seg[:, -2]).astype(int)
+    missing = set(range(expected_total_bundles)) - set(bundles)
+    if missing:
+        raise ValueError(f"[ERROR] {name} is missing bundle indices: {sorted(missing)}")
 
 print("[SUCCESS] Both segment_max and segment_min include all 50 bundles.")
 
 # === Normalize features
 print("[INFO] Normalizing features with StandardScaler...")
 scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X_full_cleaned[:, :-2])  # Exclude bundle_idx, sigma_idx
+X_scaled = scaler.fit_transform(X_full_cleaned[:, :-2])
 
 # === Train model
 print("[INFO] Training LightGBM model...")

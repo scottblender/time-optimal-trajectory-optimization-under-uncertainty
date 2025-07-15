@@ -85,13 +85,21 @@ def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
     kl_div = 0.5 * (trace_term + quadratic_term - k + log_det_term)
     return max(kl_div, 0.0)
 
+def sample_within_bounds(mean, cov, max_tries=100):
+    for _ in range(max_tries):
+        sample = np.random.multivariate_normal(mean, cov)
+        z = np.abs(sample - mean) / np.sqrt(np.diag(cov))
+        if np.all(z <= 3):
+            return sample
+    return mean
+
 def monte_carlo_segment(r0, v0, m0_val, lam, t0, t1, num_samples=500):
     from tqdm import tqdm
     mean_eci = np.hstack([r0.flatten(), v0.flatten(), m0_val])
-    samples = np.random.multivariate_normal(mean_eci, P_init, size=num_samples)
     r_trajs = []
 
-    for s in tqdm(samples, desc=f"[MC] Segment t={t0:.1f}→{t1:.1f}"):
+    for _ in tqdm(range(num_samples), desc=f"[MC] Segment t={t0:.1f}→{t1:.1f}"):
+        s = sample_within_bounds(mean_eci, P_init)
         r_s, v_s = s[:3].reshape(1, 3), s[3:6].reshape(1, 3)
         m_s = s[6]
         state_mee = np.hstack([rv2mee.rv2mee(r_s, v_s, mu).flatten(), m_s])
@@ -100,6 +108,7 @@ def monte_carlo_segment(r0, v0, m0_val, lam, t0, t1, num_samples=500):
                         [t0, t1], S, t_eval=np.linspace(t0, t1, 20))
         r, _ = mee2rv.mee2rv(*sol.y[:6], mu)
         r_trajs.append(r)
+
     return np.array(r_trajs)
 
 def evaluate_and_plot(X, y, model, scaler, Wm, Wc, label, bundle_idx):
