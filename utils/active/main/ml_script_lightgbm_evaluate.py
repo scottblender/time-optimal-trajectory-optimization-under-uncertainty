@@ -119,7 +119,7 @@ def evaluate_and_plot(X, y, model, scaler, Wm, Wc, label, bundle_idx):
     for sigma_idx in sigma_indices:
         traj = []
         for i, (t0, t1) in enumerate(segments):
-            row = X_b[(X_b[:, 0] == t0) & (X_b[:, -1] == sigma_idx)][1]
+            row = X_b[(X_b[:, 0] == t0) & (X_b[:, -1] == sigma_idx)]
             lam = y_pred[(X_b[:, 0] == t0) & (X_b[:, -1] == sigma_idx)][0]
             if sigma_idx == 0:
                 control_profile.append(lam)
@@ -161,7 +161,7 @@ def evaluate_and_plot(X, y, model, scaler, Wm, Wc, label, bundle_idx):
         plot_3sigma_ellipsoid(ax, mean_r_end, cov_end, color='black', alpha=0.2)
 
         # Monte Carlo from fresh sigma₀ row
-        row_sigma0 = X_b[(X_b[:, 0] == t0) & (X_b[:, -1] == 0)][1]
+        row_sigma0 = X_b[(X_b[:, 0] == t0) & (X_b[:, -1] == 0)]
         mee0 = row_sigma0[1:8]
         r0, v0 = mee2rv.mee2rv(*[np.array([val]) for val in mee0[:6]], mu)
         m0_val = mee0[6]

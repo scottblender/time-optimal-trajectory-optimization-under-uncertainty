@@ -43,26 +43,20 @@ for file in tqdm(batch_files, desc="[INFO] Loading batches"):
     X_all.append(Xb)
     y_all.append(yb)
 
-    # Optimized segment filtering using vectorized OR mask
-    segment_pairs = {
-        "max": list(zip(t_max_neighbors[:-1], t_max_neighbors[1:])),
-        "min": list(zip(t_min_neighbors[:-1], t_min_neighbors[1:]))
-    }
-
-    for label, pairs in segment_pairs.items():
-        bounds = np.array(pairs)
-        mask = np.zeros(len(Xb), dtype=bool)
-        for t0, t1 in bounds:
-            mask |= (Xb[:, 0] >= t0 - 1e-6) & (Xb[:, 0] <= t1 + 1e-6)
-        if np.any(mask):
-            if label == "max":
-                X_max.append(Xb[mask])
-                y_max.append(yb[mask])
-            else:
-                X_min.append(Xb[mask])
-                y_min.append(yb[mask])
-        else:
-            print(f"[WARN] No data in {file} for {label} segments")
+    # Exact time match filtering
+    for t_extract, X_list, y_list, label in [
+        (t_max_neighbors, X_max, y_max, "max"),
+        (t_min_neighbors, X_min, y_min, "min")
+    ]:
+        matched_any = False
+        for t in t_extract:
+            mask = np.isclose(Xb[:, 0], t, atol=1e-8)
+            if np.any(mask):
+                X_list.append(Xb[mask])
+                y_list.append(yb[mask])
+                matched_any = True
+        if not matched_any:
+            print(f"[WARN] No data in {file} for {label} times {t_extract}")
 
 # === Check for empty segment data ===
 if not X_max or not y_max:
@@ -140,7 +134,8 @@ base_model = LGBMRegressor(
     n_estimators=300,
     learning_rate=0.03,
     max_depth=6,
-    min_data_in_leaf=20,
+    min_child_samples=20,
+    force_row_wise=True,
     random_state=42,
     verbose=1
 )
