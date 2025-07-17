@@ -105,7 +105,7 @@ y_min = np.vstack(y_min)
 # === Deduplicate σ-point rows at t₀ (keep last per group)
 df_X = pd.DataFrame(X_full)
 df_y = pd.DataFrame(y_full)
-df_X.columns = ['t', 'p', 'f', 'g', 'h', 'L', 'mass', 'dummy1',
+df_X.columns = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass',
                 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7',
                 'bundle_idx', 'sigma_idx']
 df_X["orig_index"] = np.arange(len(df_X))
