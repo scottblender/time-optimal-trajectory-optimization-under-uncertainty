@@ -50,8 +50,8 @@ def propagate(state, t0, tf, F_val, model, scaler, mu, c, m0, g0, P_model):
     try:
         mee = np.hstack([rv2mee(state[:3].reshape(1,3), state[3:6].reshape(1,3), mu).flatten(), state[6]])
         x_input = np.hstack([t0, mee, np.zeros(7)])
-        cov_features = np.hstack([P_model[i, i] for i in range(7)])  # Diagonal elements of P_model
-        x_input[8:] = cov_features  # Replace dummy features with current P_model uncertainty
+        cov_features = np.hstack([P_model[i, i] for i in range(7)])
+        x_input[8:] = cov_features
         x_df = pd.DataFrame([x_input], columns=[
             't', 'p', 'f', 'g', 'h', 'L', 'mass',
             'dummy1', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'
@@ -67,7 +67,6 @@ def propagate(state, t0, tf, F_val, model, scaler, mu, c, m0, g0, P_model):
         return None
 
 def main():
-    # Load dependencies
     model = joblib.load("trained_model.pkl")
     scaler = joblib.load("scaler.pkl")
     data = joblib.load("stride_4000min/bundle_data_4000min.pkl")
@@ -76,45 +75,61 @@ def main():
     t_vals = np.asarray(data["backTspan"][::-1])
     os.makedirs("uncertainty_aware_outputs", exist_ok=True)
 
-    # === Sampling at fixed t_k ===
     t_frac_fixed = 0.9
     t_k = t_frac_fixed * t_vals[-1]
     idx = np.argmin(np.abs(t_vals - t_k))
     r0, v0, m0_val = r_nom[idx], v_nom[idx], mass_nom[idx]
     state_nom = np.hstack([r0, v0, m0_val])
-    P_fixed = np.block([
-        [np.eye(3)*0.01,           np.zeros((3,3)), np.zeros((3,1))],
-        [np.zeros((3,3)), np.eye(3)*0.0001,          np.zeros((3,1))],
-        [np.zeros((1,3)), np.zeros((1,3)), np.array([[0.0001]])]
+
+    # === Realistic MEE+mass covariance diagonal ranges ===
+    diag_mins = np.array([
+        9.098224e+01,   # p
+        7.082445e-04,   # f
+        6.788599e-04,   # g
+        1.376023e-08,   # h
+        2.346605e-08,   # k
+        5.885859e-08,   # L
+        1.000000e-04    # mass
     ])
 
-    # === Sigma point parameters ===
+    diag_maxs = np.array([
+        1.977489e+03,
+        6.013501e-03,
+        5.173225e-03,
+        4.284912e-04,
+        1.023625e-03,
+        6.818500e+00,
+        1.000000e-04
+    ])
+
+    cov_setups = {}
+    num_levels = 4
+    for i, alpha in enumerate(np.linspace(0.0, 1.0, num_levels)):
+        diag_vals = diag_mins + alpha * (diag_maxs - diag_mins)
+        P_model = np.diag(diag_vals)
+        cov_setups[i+1] = P_model
+
+    # === Base Cartesian covariance for sigmas and MC ===
+    P_cart_base = np.block([
+        [np.eye(3)*0.01,       np.zeros((3,3)), np.zeros((3,1))],
+        [np.zeros((3,3)), np.eye(3)*0.0001,     np.zeros((3,1))],
+        [np.zeros((1,3)), np.zeros((1,3)),      np.array([[0.0001]])]
+    ])
+
     nsd = 7
     alpha = np.sqrt(9 / (nsd + (3 - nsd)))
     beta = 2
     kappa = 3 - nsd
     sp = MerweScaledSigmaPoints(n=nsd, alpha=alpha, beta=beta, kappa=kappa)
-    sigma_states = sp.sigma_points(state_nom, P_fixed)
+    sigma_states = sp.sigma_points(state_nom, P_cart_base)
     Wm, Wc = sp.Wm, sp.Wc
-    mc_samples = np.random.multivariate_normal(state_nom, P_fixed, size=100)
+    mc_samples = np.random.multivariate_normal(state_nom, P_cart_base, size=100)
 
-    # === Varying thrust and P_model ===
     thrust_vals = [0.85, 0.925, 1.0]
-    cov_setups = {
-        1: (np.eye(3)*0.01,  np.eye(3)*0.0001, np.array([[0.0001]])),
-        2: (np.eye(3)*0.05,  np.eye(3)*0.0005, np.array([[0.0005]])),
-        3: (np.eye(3)*0.1,  np.eye(3)*0.001, np.array([[0.001]]))
-    }
-
     summary_rows = []
-    for thrust_scale in thrust_vals:
-        for cov_id, (P_pos, P_vel, P_mass) in cov_setups.items():
-            P_model = np.block([
-                [P_pos, np.zeros((3,3)), np.zeros((3,1))],
-                [np.zeros((3,3)), P_vel, np.zeros((3,1))],
-                [np.zeros((1,3)), np.zeros((1,3)), P_mass]
-            ])
 
+    for thrust_scale in thrust_vals:
+        for cov_id, P_model in cov_setups.items():
             fig = plt.figure(figsize=(6.5, 5.5))
             ax = fig.add_subplot(111, projection='3d')
             tf = t_vals[-1]
@@ -149,8 +164,6 @@ def main():
 
             r_mc_end = np.array(mc_endpoints)
             mu_mc = np.mean(r_mc_end, axis=0)
-            cov_mc = np.einsum("ni,nj->ij", r_mc_end - mu_mc, r_mc_end - mu_mc) / r_mc_end.shape[0]
-            plot_3sigma_ellipsoid(ax, mu_mc, cov_mc, color='0.6', alpha=0.15)
 
             summary_rows.append({
                 'thrust': thrust_scale,
@@ -167,11 +180,12 @@ def main():
                 Line2D([0], [0], linestyle=':', color='0.6', lw=1.0, label='Monte Carlo'),
                 Line2D([0], [0], marker='o', color='black', linestyle='', label='Start', markersize=5),
                 Line2D([0], [0], marker='X', color='black', linestyle='', label='End', markersize=6),
-                Patch(color='gray', alpha=0.2, label='3σ Ellipsoid (σ)'),
-                Patch(color='0.6', alpha=0.15, label='3σ Ellipsoid (MC)')
+                Patch(color='gray', alpha=0.2, label='3σ Ellipsoid (σ)')
             ], loc='upper left', fontsize=8)
 
-            ax.set_xlabel("X [km]"); ax.set_ylabel("Y [km]"); ax.set_zlabel("Z [km]")
+            ax.set_xlabel("X [km]")
+            ax.set_ylabel("Y [km]")
+            ax.set_zlabel("Z [km]")
             set_axes_equal(ax)
             plt.tight_layout()
 
@@ -184,12 +198,7 @@ def main():
     df.to_csv("uncertainty_aware_outputs/uncertainty_summary.csv", index=False)
     print("[Saved] uncertainty_summary.csv")
 
-    # === Plotting deviation from nominal final vs uncertainty magnitude ===
-    df["uncertainty_level"] = df["cov_id"].map({
-        1: np.trace(np.eye(3)*0.01) + np.trace(np.eye(3)*0.0001) + 0.0001,
-        2: np.trace(np.eye(3)*0.05) + np.trace(np.eye(3)*0.0005) + 0.0005,
-        3: np.trace(np.eye(3)*10) + np.trace(np.eye(3)*0.001) + 0.001,
-    })
+    df["uncertainty_level"] = df["cov_id"].map({k: np.trace(P) for k, P in cov_setups.items()})
 
     fig, ax = plt.subplots(figsize=(6.5, 4))
     for thrust_scale in sorted(df["thrust"].unique()):
@@ -208,7 +217,42 @@ def main():
     plt.savefig("uncertainty_aware_outputs/final_deviation_vs_uncertainty.pdf", bbox_inches='tight')
     plt.close()
     print("[Saved] final_deviation_vs_uncertainty.pdf")
+    # === Lambda sensitivity plot ===
+    lambda_base = None
+    trace_vals, delta_lambdas = [], []
 
+    for cov_id, P_model in cov_setups.items():
+        mee = np.hstack([rv2mee(state_nom[:3].reshape(1,3), state_nom[3:6].reshape(1,3), mu).flatten(), state_nom[6]])
+        x_input = np.hstack([t_k, mee, np.zeros(7)])
+        cov_diag = np.diag(P_model)
+        x_input[8:] = cov_diag
+        x_df = pd.DataFrame([x_input], columns=[
+            't', 'p', 'f', 'g', 'h', 'L', 'mass',
+            'dummy1', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'
+        ])
+        lam_pred = model.predict(scaler.transform(x_df))[0]
+        if lambda_base is None:
+            lambda_base = lam_pred
+        delta = np.abs(lam_pred - lambda_base)
+        delta_lambdas.append(delta)
+        trace_vals.append(np.trace(P_model))
+
+    delta_lambdas = np.array(delta_lambdas)
+    trace_vals = np.array(trace_vals)
+    rel_deltas = delta_lambdas / (np.abs(lambda_base) + 1e-8)
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for i in range(7):
+        ax.plot(trace_vals, rel_deltas[:, i], label=f"$\lambda_{i+1}$", marker='o')
+    ax.set_xlabel("Trace of Initial Covariance ($\mathrm{Tr}(P_0)$)")
+    ax.set_ylabel("Relative Change in λ")
+    ax.set_title("Sensitivity of Control λ to Initial Uncertainty")
+    ax.legend(ncol=2, fontsize=8)
+    ax.grid(True)
+    plt.tight_layout()
+    plt.savefig("uncertainty_aware_outputs/lambda_sensitivity_plot.pdf", bbox_inches='tight')
+    plt.close()
+    print("[Saved] lambda_sensitivity_plot.pdf")
 
 if __name__ == "__main__":
     main()
