@@ -1,11 +1,9 @@
 import os
-import glob
 import joblib
 import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from collections import defaultdict
 from torch.utils.data import DataLoader, Dataset
 
 # === Constants ===
@@ -16,7 +14,9 @@ hidden_size = 128
 num_layers = 4
 learning_rate = 0.001
 epochs = 50
-patience = 4
+patience = 2
+num_workers = 4
+TRAIN_LIMIT = 10_000_000  # cap training size
 
 # === Model ===
 class TCN_MANN(nn.Module):
@@ -37,58 +37,54 @@ class TCN_MANN(nn.Module):
         )
 
     def forward(self, x):
-        x = x.transpose(1, 2)
+        x = x.transpose(1, 2)  # (batch, features, seq)
         x = self.tcn(x)
         x = self.controller(x)
-        return x.transpose(1, 2)
+        return x.transpose(1, 2)  # (batch, seq, output)
 
 # === Dataset ===
-class SequenceByBundleDataset(Dataset):
-    def __init__(self, sequence_path, seq_length):
-        print("[DATASET] Loading preprocessed bundle-sigma sequences...")
-        self.sequences = joblib.load(sequence_path, mmap_mode='r')
+class MonolithicSequenceDataset(Dataset):
+    def __init__(self, path, seq_length):
+        print(f"[DATASET] Loading: {path}")
+        d = joblib.load(path, mmap_mode='r')
+        self.X = d["X"]
+        self.y = d["y"]
         self.seq_length = seq_length
-        self.samples = []
-
-        print("[DATASET] Indexing sequences...")
-        for key, data in tqdm(self.sequences.items()):
-            X_seq, y_seq = data["X"], data["y"]
-            for i in range(len(X_seq) - seq_length):
-                self.samples.append((key, i))  # store pointer to original array
-
-        print(f"[DATASET] Total sequence samples: {len(self.samples)}")
+        self.length = len(self.X) - seq_length
+        print(f"[DATASET] X shape: {self.X.shape} | y shape: {self.y.shape}")
+        print(f"[DATASET] Using {self.length:,} sequences of length {seq_length}")
 
     def __len__(self):
-        return len(self.samples)
+        return self.length
 
-    def __getitem__(self, idx):
-        (bundle, sigma), i = self.samples[idx]
-        X_seq = self.sequences[(bundle, sigma)]["X"][i:i+self.seq_length]
-        y = self.sequences[(bundle, sigma)]["y"][i+self.seq_length]
-        return torch.tensor(X_seq, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
+    def __getitem__(self, i):
+        x_seq = self.X[i:i+self.seq_length]
+        y_next = self.y[i+self.seq_length]
+        return torch.tensor(x_seq, dtype=torch.float32), torch.tensor(y_next, dtype=torch.float32)
 
-# === Main ===
-if __name__ == "__main__":
-    print("[STEP 1] Loading time index from file...")
-    index_data = joblib.load("time_index_tcn.pkl")
-    time_to_rows_X = defaultdict(list, index_data["X_map"])
-    time_to_rows_y = defaultdict(list, index_data["y_map"])
-    time_vals = index_data["time_vals"]
-
-    total_rows = sum(len(v) for v in time_to_rows_X.values())
-    print(f"[INFO] Total unique time steps: {len(time_vals)}")
-    print(f"[INFO] Total input rows loaded: {total_rows:,}")
-
-    print("[STEP 2] Loading dataset...")
-    dataset = SequenceByBundleDataset("bundle_sigma_sequences.pkl", seq_length)
+# === Main Training Function ===
+def main():
+    dataset = MonolithicSequenceDataset("TCN_monolithic_sorted.pkl", seq_length)
     val_size = min(int(0.01 * len(dataset)), 100_000)
     train_size = len(dataset) - val_size
-    train_data, val_data = torch.utils.data.random_split(dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False, num_workers=0)
-    print(f"[INFO] Train samples: {len(train_data)} | Val samples: {len(val_data)}")
+    # Split once
+    train_full, val_data = torch.utils.data.random_split(dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
+    # If needed, cap the train set directly
+    if TRAIN_LIMIT < train_size:
+        print(f"[INFO] Limiting training set to {TRAIN_LIMIT:,} samples...")
+        train_data = torch.utils.data.Subset(train_full, list(range(TRAIN_LIMIT)))
+    else:
+        train_data = train_full
+    pin_memory = torch.cuda.is_available()
 
-    print("[STEP 3] Initializing model...")
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=pin_memory)
+    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False,
+                            num_workers=num_workers, pin_memory=pin_memory)
+
+    print(f"[INFO] Train samples: {len(train_data):,} | Val samples: {len(val_data):,}")
+
+    # Initialize model
     sample_X, sample_y = dataset[0]
     model = TCN_MANN(input_size=sample_X.shape[1],
                      hidden_size=hidden_size,
@@ -97,7 +93,6 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.MSELoss()
 
-    print("[STEP 4] Starting training...")
     best_model = None
     best_val_loss = float("inf")
     epochs_no_improve = 0
@@ -106,7 +101,7 @@ if __name__ == "__main__":
         model.train()
         train_loss = 0.0
         print(f"\n[EPOCH {epoch+1}] Training...")
-        for batch_idx, (Xb, yb) in enumerate(train_loader):
+        for Xb, yb in tqdm(train_loader, desc="Train Batches"):
             Xb, yb = Xb.to(device), yb.to(device)
             optimizer.zero_grad()
             pred = model(Xb)[:, -1, :]
@@ -114,19 +109,17 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * Xb.size(0)
-            if batch_idx % 10 == 0:
-                print(f"  [Batch {batch_idx}] Loss: {loss.item():.6f}")
 
-        train_loss /= train_size
+        train_loss /= len(train_data)
 
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for Xb, yb in val_loader:
+            for Xb, yb in tqdm(val_loader, desc="Val Batches"):
                 pred = model(Xb.to(device))[:, -1, :]
                 loss = criterion(pred, yb.to(device))
                 val_loss += loss.item() * Xb.size(0)
-        val_loss /= val_size
+        val_loss /= len(val_data)
 
         print(f"[EPOCH {epoch+1:03d}] Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
 
@@ -142,6 +135,12 @@ if __name__ == "__main__":
                 print(f"[EARLY STOP] No improvement for {patience} epochs.")
                 break
 
-    print("[STEP 5] Saving best model...")
+    print("[STEP] Saving best model...")
     torch.save(best_model, "trained_model_tcn.pt")
     print("[DONE] Model saved to trained_model_tcn.pt")
+
+# === Safe Entry Point ===
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    main()
