@@ -15,6 +15,7 @@ from scipy.spatial.distance import mahalanobis
 from numpy.linalg import inv, eigh
 from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
+plt.rcParams.update({'font.size': 10})
 
 # === Setup ===
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -65,12 +66,21 @@ def set_axes_equal(ax):
     ax.set_ylim3d([centers[1] - max_range, centers[1] + max_range])
     ax.set_zlim3d([centers[2] - max_range, centers[2] + max_range])
     ax.set_box_aspect([1.25, 1, 0.75])
+    ax.grid(False)
     ax.xaxis.pane.fill = False
     ax.yaxis.pane.fill = False
     ax.zaxis.pane.fill = False
     ax.xaxis.pane.set_edgecolor('w')
     ax.yaxis.pane.set_edgecolor('w')
     ax.zaxis.pane.set_edgecolor('w')
+
+def set_max_ticks(fig, n=5):
+    from matplotlib.ticker import MaxNLocator
+    for ax in fig.get_axes():
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=n))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=n))
+        if hasattr(ax, 'zaxis'):
+            ax.zaxis.set_major_locator(MaxNLocator(nbins=5))
 
 # === Metric Utilities ===
 def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
@@ -231,17 +241,16 @@ def evaluate_and_plot_segment(X, y, model, scaler, Wm, Wc, label, bundle_idx):
     ax.set_ylabel("Y [km]")
     ax.set_zlabel("Z [km]")
     set_axes_equal(ax)
+    set_max_ticks(fig)
 
     ax.legend(handles=[
-        Line2D([0], [0], color='black', lw=2.2, label='Nominal (σ₀)'),
+        Line2D([0], [0], color='black', lw=2.2, label='Sub-nominal Mean State'),
         Line2D([0], [0], color='gray', lw=0.8, linestyle='--', label='Sigma Points'),
         Line2D([0], [0], color='0.4', lw=0.6, linestyle=':', label='Monte Carlo'),
         Line2D([0], [0], marker='o', color='black', linestyle='', label='Start', markersize=5),
         Line2D([0], [0], marker='X', color='black', linestyle='', label='End', markersize=6),
         Patch(facecolor='0.5', edgecolor='0.5', alpha=0.2, label='3-σ Ellipsoid')
-    ], loc='upper left', bbox_to_anchor=(0.03, 0.95), fontsize=8, frameon=True)
-
-    plt.grid(True)
+    ], loc='upper left', bbox_to_anchor=(0.03, 1.07), frameon=True)
 
 
     os.makedirs(f"eval_lightgbm_outputs/{label}/bundle_{bundle_idx}", exist_ok=True)

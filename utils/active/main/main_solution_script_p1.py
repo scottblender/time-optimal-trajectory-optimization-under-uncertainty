@@ -11,8 +11,7 @@ from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 import joblib
 
-plt.rcParams.update({'font.size': 8})
-plt.rcParams['axes.grid'] = True
+plt.rcParams.update({'font.size': 10})
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 from mee2rv import mee2rv
@@ -50,9 +49,18 @@ def set_axes_equal(ax):
     ax.xaxis.pane.fill = False
     ax.yaxis.pane.fill = False
     ax.zaxis.pane.fill = False
+    ax.grid(False)
     ax.xaxis.pane.set_edgecolor('w')
     ax.yaxis.pane.set_edgecolor('w')
     ax.zaxis.pane.set_edgecolor('w')
+
+def set_max_ticks(fig, n=5):
+    from matplotlib.ticker import MaxNLocator
+    for ax in fig.get_axes():
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=n))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=n))
+        if hasattr(ax, 'zaxis'):
+            ax.zaxis.set_major_locator(MaxNLocator(nbins=5))
 
 def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
     k = mu1.shape[0]
@@ -104,8 +112,8 @@ def main():
             ax.scatter(r_tr[-1, 0], r_tr[-1, 1], r_tr[-1, 2], color='black', marker='X', s=25, label='End')
             ax.set_xlabel("X [km]"); ax.set_ylabel("Y [km]"); ax.set_zlabel("Z [km]")
             set_axes_equal(ax)
+            set_max_ticks(fig)
             ax.legend(loc='upper left', bbox_to_anchor=(0.03, 0.95))
-            plt.grid(True)
             plt.savefig(f"{out_root}/{name}.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
             plt.close()
 
@@ -221,15 +229,15 @@ def main():
                 ax.set_ylabel('Y [km]')
                 ax.set_zlabel('Z [km]')
                 set_axes_equal(ax)
+                set_max_ticks(fig)
                 ax.legend(handles=[
-                    Line2D([0], [0], color='black', lw=2.2, label='Nominal (σ₀)'),
+                    Line2D([0], [0], color='black', lw=2.2, label='Sub-nominal Mean State'),
                     Line2D([0], [0], color='gray', lw=0.8, linestyle='--', label='Sigma Points'),
                     Line2D([0], [0], color='0.4', lw=0.6, linestyle=':', label='Monte Carlo'),
                     Line2D([0], [0], marker='o', color='black', linestyle='', label='Start', markersize=4),
                     Line2D([0], [0], marker='X', color='black', linestyle='', label='End', markersize=5),
                     Patch(facecolor='0.5', edgecolor='0.5', alpha=0.2, label='3-σ Ellipsoid')
-                ], loc='upper left', bbox_to_anchor=(0.03, 0.95), fontsize=8, frameon=True, facecolor='white')
-                plt.grid(True)
+                ], loc='upper left', bbox_to_anchor=(0.03, 1.07), frameon=True, facecolor='white')
                 plt.savefig(f"{out_dir}/sigma_mc_comparison.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
                 plt.close()
 
