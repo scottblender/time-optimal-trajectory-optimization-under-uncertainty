@@ -168,3 +168,4 @@ control_comparisons.txt
 *.txt
 *.pdf
 *.pdf
+*.npy
