@@ -66,7 +66,7 @@ if __name__ == "__main__":
     dataset = MonolithicSequenceDataset("TCN_monolithic_sorted.pkl", seq_length)
     val_size = min(int(0.01 * len(dataset)), 100_000)
     train_size = len(dataset) - val_size
-    TRAIN_LIMIT = 1_000_000
+    TRAIN_LIMIT = 2_000_000
     train_data, val_data = torch.utils.data.random_split(dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
     if TRAIN_LIMIT < train_size:
         print(f"[INFO] Capping training data to {TRAIN_LIMIT:,} samples...")
