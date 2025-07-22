@@ -1,4 +1,5 @@
-# ml_script_lightgbm_evaluate.py
+# ml_script_tcn_evaluate.py
+
 import os
 import warnings
 import joblib
@@ -11,14 +12,15 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from scipy.integrate import solve_ivp
 from scipy.spatial.distance import mahalanobis
-from numpy.linalg import inv, eigh
+from numpy.linalg import inv
+import torch
 from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
-plt.rcParams.update({'font.size': 10})
 
 # === Setup ===
 warnings.filterwarnings("ignore", category=UserWarning)
 os.environ['LGBM_LOGLEVEL'] = '2'
+plt.rcParams.update({'font.size': 10})
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
@@ -37,7 +39,28 @@ P_init = np.block([
     [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
 ])
 
-# === Plotting Utilities ===
+# === Utilities from LightGBM version (same) ===
+def set_axes_equal(ax):
+    limits = [ax.get_xlim3d(), ax.get_ylim3d(), ax.get_zlim3d()]
+    ranges = [abs(l[1] - l[0]) for l in limits]
+    centers = [np.mean(l) for l in limits]
+    max_range = max(ranges) / 2
+    for ax_dim, center in zip([ax.set_xlim3d, ax.set_ylim3d, ax.set_zlim3d], centers):
+        ax_dim([center - max_range, center + max_range])
+    ax.set_box_aspect([1.25, 1, 0.75])
+    for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
+        axis.pane.fill = False
+        axis.pane.set_edgecolor('w')
+    ax.grid(False)
+
+def set_max_ticks(fig, n=5):
+    from matplotlib.ticker import MaxNLocator
+    for ax in fig.get_axes():
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=n))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=n))
+        if hasattr(ax, 'zaxis'):
+            ax.zaxis.set_major_locator(MaxNLocator(nbins=5))
+
 def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.2, scale=3.0):
     cov = 0.5 * (cov + cov.T) + np.eye(3) * 1e-10
     eigvals, eigvecs = np.linalg.eigh(cov)
@@ -56,32 +79,6 @@ def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.2, scale=3.0):
     ax.plot_wireframe(ellipsoid[:, :, 0], ellipsoid[:, :, 1], ellipsoid[:, :, 2],
                       rstride=5, cstride=5, color='k', alpha=0.2, linewidth=0.3)
 
-def set_axes_equal(ax):
-    x_limits, y_limits, z_limits = ax.get_xlim3d(), ax.get_ylim3d(), ax.get_zlim3d()
-    ranges = [abs(lim[1] - lim[0]) for lim in [x_limits, y_limits, z_limits]]
-    centers = [np.mean(lim) for lim in [x_limits, y_limits, z_limits]]
-    max_range = max(ranges) / 2
-    ax.set_xlim3d([centers[0] - max_range, centers[0] + max_range])
-    ax.set_ylim3d([centers[1] - max_range, centers[1] + max_range])
-    ax.set_zlim3d([centers[2] - max_range, centers[2] + max_range])
-    ax.set_box_aspect([1.25, 1, 0.75])
-    ax.grid(False)
-    ax.xaxis.pane.fill = False
-    ax.yaxis.pane.fill = False
-    ax.zaxis.pane.fill = False
-    ax.xaxis.pane.set_edgecolor('w')
-    ax.yaxis.pane.set_edgecolor('w')
-    ax.zaxis.pane.set_edgecolor('w')
-
-def set_max_ticks(fig, n=5):
-    from matplotlib.ticker import MaxNLocator
-    for ax in fig.get_axes():
-        ax.xaxis.set_major_locator(MaxNLocator(nbins=n))
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=n))
-        if hasattr(ax, 'zaxis'):
-            ax.zaxis.set_major_locator(MaxNLocator(nbins=5))
-
-# === Metric Utilities ===
 def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
     k = mu1.shape[0]
     sigma2_inv = inv(sigma2)
@@ -93,24 +90,6 @@ def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
     if sign1 <= 0 or sign2 <= 0:
         return 0.0
     return 0.5 * (trace_term + quad_term - k + logdet2 - logdet1)
-
-def cosine_similarity(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-# === MC Segment (Single, Fast) ===
-def monte_carlo_segment(r0, v0, m0_val, lam, t0, t1, num_samples=500):
-    mean = np.hstack([r0.flatten(), v0.flatten(), m0_val])
-    samples = np.random.multivariate_normal(mean, P_init, size=num_samples)
-    r_trajs = []
-    for s in tqdm(samples, desc=f"[MC] {t0:.2f} → {t1:.2f}", leave=False):
-        r_s, v_s, m_s = s[:3], s[3:6], s[6]
-        mee_state = np.hstack([rv2mee(r_s.reshape(1, 3), v_s.reshape(1, 3), mu).flatten(), m_s])
-        state = np.hstack([mee_state, lam])
-        sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F, c, m0, g0),
-                        [t0, t1], state, t_eval=np.linspace(t0, t1, 20))
-        r, _ = mee2rv(*sol.y[:6], mu)
-        r_trajs.append(r)
-    return np.array(r_trajs)
 
 def compute_thrust_direction(mu, F, mee, lam):
     p, f, g, h, k, L = mee[:-1]
@@ -139,7 +118,22 @@ def compute_thrust_direction(mu, F, mee, lam):
     mat = A.T @ lam_matrix
     return (mat.flatten() / np.linalg.norm(mat))
 
-def evaluate_and_plot_segment(X, y, model, Wm, Wc, label, bundle_idx):
+# === Monte Carlo Segment ===
+def monte_carlo_segment(r0, v0, m0_val, lam, t0, t1, num_samples=500):
+    mean = np.hstack([r0.flatten(), v0.flatten(), m0_val])
+    samples = np.random.multivariate_normal(mean, P_init, size=num_samples)
+    r_trajs = []
+    for s in tqdm(samples, desc=f"[MC] {t0:.2f} → {t1:.2f}", leave=False):
+        r_s, v_s, m_s = s[:3], s[3:6], s[6]
+        mee_state = np.hstack([rv2mee(r_s.reshape(1, 3), v_s.reshape(1, 3), mu).flatten(), m_s])
+        state = np.hstack([mee_state, lam])
+        sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F, c, m0, g0),
+                        [t0, t1], state, t_eval=np.linspace(t0, t1, 20))
+        r, _ = mee2rv(*sol.y[:6], mu)
+        r_trajs.append(r)
+    return np.array(r_trajs)
+
+def evaluate_and_plot_segment(X, y, model, scaler, scaler_y, Wm, Wc, label, bundle_idx):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     from matplotlib.lines import Line2D
@@ -170,7 +164,12 @@ def evaluate_and_plot_segment(X, y, model, Wm, Wc, label, bundle_idx):
     for sigma_idx in sigma_indices:
         x_row = get_row(t0, sigma_idx)
         x_df = pd.DataFrame([x_row[:-2]])
-        lam_pred = model.predict(x_df)[0]
+        x_norm = scaler.transform(x_df)
+        x_tensor = torch.from_numpy(x_norm.astype(np.float32)).unsqueeze(-1)
+        x_tensor = x_tensor.permute(0, 2, 1)
+        with torch.no_grad():
+            lam_scaled = model(x_tensor).squeeze(0).squeeze(-1).numpy().reshape(1, -1)
+        lam_pred = scaler_y.inverse_transform(lam_scaled).flatten()
         S_pred = np.concatenate([x_row[1:8], lam_pred])
         sol_pred = solve_ivp(lambda t, x: odefunc(t, x, mu, F, c, m0, g0),
                              [t0, t1], S_pred, t_eval=np.linspace(t0, t1, 20))
@@ -241,7 +240,6 @@ def evaluate_and_plot_segment(X, y, model, Wm, Wc, label, bundle_idx):
     fig = plt.figure(figsize=(6.5, 5.5))
     ax = fig.add_subplot(111, projection='3d')
 
-    # === Predicted sigma point trajectories ===
     for i in range(len(r_pred)):
         ax.plot([r_pred_start[i, 0], r_pred[i, 0]],
                 [r_pred_start[i, 1], r_pred[i, 1]],
@@ -256,7 +254,6 @@ def evaluate_and_plot_segment(X, y, model, Wm, Wc, label, bundle_idx):
         ax.scatter(r_pred[i, 0], r_pred[i, 1], r_pred[i, 2],
                 color='black', marker='X', s=8, zorder=1)
 
-    # === Monte Carlo trajectories (subsampled) ===
     for j in range(0, len(mc_traj), 5):
         traj = mc_traj[j]
         ax.plot(traj[:, 0], traj[:, 1], traj[:, 2],
@@ -266,11 +263,9 @@ def evaluate_and_plot_segment(X, y, model, Wm, Wc, label, bundle_idx):
         ax.scatter(traj[-1, 0], traj[-1, 1], traj[-1, 2],
                 color='0.4', s=8, marker='X', alpha=0.3, zorder=1)
 
-    # === Ellipsoids ===
     plot_3sigma_ellipsoid(ax, mu_pred_start, cov_pred_start, color='0.5', alpha=0.15)
     plot_3sigma_ellipsoid(ax, mu_pred, cov_pred, color='0.5', alpha=0.25)
 
-    # === Labels and legend ===
     ax.set_xlabel("X [km]")
     ax.set_ylabel("Y [km]")
     ax.set_zlabel("Z [km]")
@@ -286,9 +281,8 @@ def evaluate_and_plot_segment(X, y, model, Wm, Wc, label, bundle_idx):
         Patch(facecolor='0.5', edgecolor='0.5', alpha=0.2, label='3-σ Ellipsoid')
     ], loc='upper left', bbox_to_anchor=(0.03, 1.07), frameon=True)
 
-
-    os.makedirs(f"eval_lightgbm_outputs/{label}/bundle_{bundle_idx}", exist_ok=True)
-    plt.savefig(f"eval_lightgbm_outputs/{label}/bundle_{bundle_idx}/sigma_mc_comparison.pdf",
+    os.makedirs(f"eval_tcn_outputs/{label}/bundle_{bundle_idx}", exist_ok=True)
+    plt.savefig(f"eval_tcn_outputs/{label}/bundle_{bundle_idx}/sigma_mc_comparison.pdf",
                 dpi=600, bbox_inches='tight', pad_inches=0.5)
     plt.close()
 
@@ -323,7 +317,20 @@ def evaluate_and_plot_segment(X, y, model, Wm, Wc, label, bundle_idx):
 
 # === Main ===
 def main():
-    model = joblib.load("trained_model.pkl")
+    model = torch.load("trained_model_tcn.pt", map_location=torch.device("cpu"))
+    from ml_script_tcn_train import TCN_MANN  # Import your model class
+
+    # === Rebuild the model first ===
+    input_size = 15        # update if different
+    hidden_size = 128
+    output_size = 7
+    num_layers = 4
+    kernel_size = 3
+
+    model = TCN_MANN(input_size, hidden_size, output_size, num_layers, kernel_size=kernel_size)
+    model.load_state_dict(torch.load("trained_model_tcn.pt", map_location="cpu"))
+    scaler = joblib.load("scaler_tcn.pkl")
+    scaler_y = joblib.load("scaler_tcn_y.pkl")
     Wm = joblib.load("Wm.pkl")
     Wc = joblib.load("Wc.pkl")
     data_max = joblib.load("segment_max.pkl")
@@ -332,11 +339,11 @@ def main():
     results = []
     for label, data in [("min", data_min),("max", data_max)]:
         for bundle_idx in tqdm(np.unique(data["X"][:, -2]).astype(int), desc=f"[{label}]"):
-            res = evaluate_and_plot_segment(data["X"], data["y"], model, Wm, Wc, label, bundle_idx)
+            res = evaluate_and_plot_segment(data["X"], data["y"], model, scaler, scaler_y, Wm, Wc, label, bundle_idx)
             if res: results.append(res)
 
     df = pd.DataFrame(results)
-    df.to_csv("eval_lightgbm_outputs/metrics_summary.csv", index=False)
+    df.to_csv("eval_tcn_outputs/metrics_summary.csv", index=False)
     print(df)
 
 if __name__ == "__main__":

@@ -145,11 +145,6 @@ for name, X_seg in [("segment_max", X_max), ("segment_min", X_min)]:
 
 print("[SUCCESS] Both segment_max and segment_min include all 50 bundles.")
 
-# === Normalize features
-print("[INFO] Normalizing features with StandardScaler...")
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X_full_cleaned[:, :-2])
-
 # === Train model
 print("[INFO] Training LightGBM model...")
 base_model = LGBMRegressor(
@@ -162,11 +157,10 @@ base_model = LGBMRegressor(
     verbose=1
 )
 model = MultiOutputRegressor(base_model)
-model.fit(X_scaled, y_full_cleaned)
+model.fit(X_full_cleaned, y_full_cleaned)
 
 # === Save everything
 joblib.dump(model, "trained_model.pkl")
-joblib.dump(scaler, "scaler.pkl")
 joblib.dump(Wm, "Wm.pkl")
 joblib.dump(Wc, "Wc.pkl")
 joblib.dump({"X": X_max, "y": y_max}, "segment_max.pkl")

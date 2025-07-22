@@ -27,45 +27,13 @@ def clean_batch(Xb, yb):
     y_clean = y_clean[~is_appended_sigma0]
     return X_clean, y_clean
 
-def stream_rows(file):
-    d = joblib.load(file, mmap_mode='r')
-    Xb, yb, meta = d["X"], d["y"], d["meta"]
-    for i in range(len(Xb)):
-        bundle = int(meta[i, 0])
-        sigma = int(meta[i, 1])
-        key = f"bundle_{bundle:02d}_sigma_{sigma:02d}"
-        with open(os.path.join(TMP_DIR, f"{key}_X.npy"), "ab") as fx, \
-             open(os.path.join(TMP_DIR, f"{key}_y.npy"), "ab") as fy:
-            np.save(fx, Xb[i])
-            np.save(fy, yb[i])
-
-def finalize_sequence(key):
-    X_path = os.path.join(TMP_DIR, f"{key}_X.npy")
-    y_path = os.path.join(TMP_DIR, f"{key}_y.npy")
-    X_stream, y_stream = [], []
-    with open(X_path, "rb") as fx, open(y_path, "rb") as fy:
-        while True:
-            try:
-                X_stream.append(np.load(fx))
-                y_stream.append(np.load(fy))
-            except ValueError:
-                break
-    X_arr = np.stack(X_stream)
-    y_arr = np.stack(y_stream)
-    sort_idx = np.argsort(X_arr[:, 0])
-    X_sorted = X_arr[sort_idx]
-    y_sorted = y_arr[sort_idx]
-    out_path = os.path.join(SEQ_DIR, f"{key}.pkl")
-    joblib.dump({"X": X_sorted, "y": y_sorted}, out_path, compress=0)
-    tqdm.write(f"[WRITE] {key} → {out_path}")
-
 if __name__ == "__main__":
     RAW_DIR = "baseline_stride_1/batch_*"
     OUT_DIR = "baseline_stride_1_cleaned"
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    print("[PASS 1] Fitting StandardScaler on all cleaned data...")
-    scaler_data = []
+    print("[PASS 1] Fitting StandardScaler on all cleaned data (X and y)...")
+    scaler_data_X, scaler_data_y = [], []
     batch_files = sorted(glob.glob(RAW_DIR))
 
     for batch_dir in tqdm(batch_files, desc="[SCALER] Collecting stats"):
@@ -75,16 +43,23 @@ if __name__ == "__main__":
             continue
         d = joblib.load(file)
         Xb, yb = d["X"], d["y"]
-        Xb_clean, _ = clean_batch(Xb, yb)
-        scaler_data.append(Xb_clean[:, :-2])  # exclude bundle_idx and sigma_idx
+        Xb_clean, yb_clean = clean_batch(Xb, yb)
+        scaler_data_X.append(Xb_clean[:, :-2])  # exclude bundle_idx and sigma_idx
+        scaler_data_y.append(yb_clean)
 
-    X_all = np.vstack(scaler_data)
-    scaler = StandardScaler()
-    scaler.fit(X_all)
-    joblib.dump(scaler, "scaler_tcn.pkl")
-    print("[DONE] Scaler fitted and saved to scaler_tcn.pkl")
+    X_all = np.vstack(scaler_data_X)
+    y_all = np.vstack(scaler_data_y)
 
-    print("[PASS 2] Cleaning + scaling + saving batches...")
+    scaler_X = StandardScaler()
+    scaler_y = StandardScaler()
+    scaler_X.fit(X_all)
+    scaler_y.fit(y_all)
+
+    joblib.dump(scaler_X, "scaler_tcn.pkl")
+    joblib.dump(scaler_y, "scaler_tcn_y.pkl")
+    print("[DONE] Scalers fitted and saved to scaler_tcn.pkl and scaler_tcn_y.pkl")
+
+    print("[PASS 2] Cleaning + scaling X and y + saving batches...")
     for batch_dir in tqdm(batch_files, desc="[PROCESS] Saving cleaned batches"):
         file = os.path.join(batch_dir, "data.pkl")
         if not os.path.exists(file):
@@ -93,15 +68,36 @@ if __name__ == "__main__":
         d = joblib.load(file)
         Xb, yb = d["X"], d["y"]
         Xb_clean, yb_clean = clean_batch(Xb, yb)
-        Xb_scaled = scaler.transform(Xb_clean[:, :-2])
+
+        Xb_scaled = scaler_X.transform(Xb_clean[:, :-2])
+        yb_scaled = scaler_y.transform(yb_clean)
         bundle_sigma = Xb_clean[:, -2:]
 
         batch_id = os.path.basename(os.path.dirname(file))
         out_dir = os.path.join(OUT_DIR, batch_id)
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, "data.pkl")
-        joblib.dump({"X": Xb_scaled, "y": yb_clean, "meta": bundle_sigma}, out_path, compress=0)
+        joblib.dump({"X": Xb_scaled, "y": yb_scaled, "meta": bundle_sigma}, out_path, compress=0)
         print(f"[SAVE] Batch {batch_id} → {out_path}")
 
     print("[COMPLETE] All batches processed and saved.")
 
+    # === Step 3: sort by time ===
+    print("[SORT] Concatenating and sorting final dataset...")
+    files = sorted(glob.glob("baseline_stride_1_cleaned/batch_*/data.pkl"))
+    X_all, y_all = [], []
+
+    for f in tqdm(files, desc="[LOAD] Reading cleaned batches"):
+        d = joblib.load(f, mmap_mode="r")
+        X_all.append(d["X"])
+        y_all.append(d["y"])
+
+    X = np.vstack(X_all)
+    y = np.vstack(y_all)
+
+    sort_idx = np.argsort(X[:, 0])
+    X_sorted = X[sort_idx]
+    y_sorted = y[sort_idx]
+
+    joblib.dump({"X": X_sorted, "y": y_sorted}, "TCN_monolithic_sorted.pkl", compress=0)
+    print("[DONE] Final sorted dataset saved to TCN_monolithic_sorted.pkl")

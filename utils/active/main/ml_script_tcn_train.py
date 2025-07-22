@@ -5,18 +5,17 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
+from sklearn.preprocessing import StandardScaler  # ADDED
 
 # === Constants ===
 device = torch.device("cpu")
 seq_length = 100
-batch_size = 512
+batch_size = 1024
 hidden_size = 128
 num_layers = 4
-learning_rate = 0.001
+learning_rate = 0.002
 epochs = 50
-patience = 2
-num_workers = 4
-TRAIN_LIMIT = 10_000_000  # cap training size
+patience = 4
 
 # === Model ===
 class TCN_MANN(nn.Module):
@@ -62,27 +61,23 @@ class MonolithicSequenceDataset(Dataset):
         y_next = self.y[i+self.seq_length]
         return torch.tensor(x_seq, dtype=torch.float32), torch.tensor(y_next, dtype=torch.float32)
 
-# === Main Training Function ===
-def main():
+# === Main ===
+if __name__ == "__main__":
     dataset = MonolithicSequenceDataset("TCN_monolithic_sorted.pkl", seq_length)
     val_size = min(int(0.01 * len(dataset)), 100_000)
     train_size = len(dataset) - val_size
-    # Split once
-    train_full, val_data = torch.utils.data.random_split(dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
-    # If needed, cap the train set directly
+    TRAIN_LIMIT = 1_000_000
+    train_data, val_data = torch.utils.data.random_split(dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
     if TRAIN_LIMIT < train_size:
-        print(f"[INFO] Limiting training set to {TRAIN_LIMIT:,} samples...")
-        train_data = torch.utils.data.Subset(train_full, list(range(TRAIN_LIMIT)))
-    else:
-        train_data = train_full
-    pin_memory = torch.cuda.is_available()
-
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True,
-                              num_workers=num_workers, pin_memory=pin_memory)
-    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False,
-                            num_workers=num_workers, pin_memory=pin_memory)
+        print(f"[INFO] Capping training data to {TRAIN_LIMIT:,} samples...")
+    train_data = torch.utils.data.Subset(train_data, range(TRAIN_LIMIT))
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False, num_workers=0)
 
     print(f"[INFO] Train samples: {len(train_data):,} | Val samples: {len(val_data):,}")
+
+    # Load y-scaler for inverse-transforming validation
+    scaler_y = joblib.load("scaler_tcn_y.pkl")
 
     # Initialize model
     sample_X, sample_y = dataset[0]
@@ -101,7 +96,7 @@ def main():
         model.train()
         train_loss = 0.0
         print(f"\n[EPOCH {epoch+1}] Training...")
-        for Xb, yb in tqdm(train_loader, desc="Train Batches"):
+        for batch_idx, (Xb, yb) in enumerate(train_loader):
             Xb, yb = Xb.to(device), yb.to(device)
             optimizer.zero_grad()
             pred = model(Xb)[:, -1, :]
@@ -109,19 +104,27 @@ def main():
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * Xb.size(0)
+            if batch_idx % 10 == 0:
+                print(f"  [Batch {batch_idx}] Loss: {loss.item():.6f}")
 
-        train_loss /= len(train_data)
+        train_loss /= train_size
 
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for Xb, yb in tqdm(val_loader, desc="Val Batches"):
-                pred = model(Xb.to(device))[:, -1, :]
-                loss = criterion(pred, yb.to(device))
-                val_loss += loss.item() * Xb.size(0)
-        val_loss /= len(val_data)
+            for Xb, yb in val_loader:
+                pred = model(Xb.to(device))[:, -1, :].cpu().numpy()
+                y_true = yb.cpu().numpy()
 
-        print(f"[EPOCH {epoch+1:03d}] Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
+                # Inverse transform to physical units
+                pred_real = scaler_y.inverse_transform(pred)
+                y_true_real = scaler_y.inverse_transform(y_true)
+
+                loss = np.mean((pred_real - y_true_real)**2)
+                val_loss += loss * Xb.size(0)
+
+        val_loss /= val_size
+        print(f"[EPOCH {epoch+1:03d}] Train Loss: {train_loss:.6f} | Val Loss (real units): {val_loss:.6f}")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -138,9 +141,3 @@ def main():
     print("[STEP] Saving best model...")
     torch.save(best_model, "trained_model_tcn.pt")
     print("[DONE] Model saved to trained_model_tcn.pt")
-
-# === Safe Entry Point ===
-if __name__ == "__main__":
-    import multiprocessing
-    multiprocessing.freeze_support()
-    main()
