@@ -157,7 +157,7 @@ base_model = LGBMRegressor(
     verbose=1
 )
 model = MultiOutputRegressor(base_model)
-model.fit(X_full_cleaned, y_full_cleaned)
+model.fit(X_full_cleaned[:,:-2], y_full_cleaned)
 
 # === Save everything
 joblib.dump(model, "trained_model.pkl")
