@@ -119,7 +119,7 @@ def compute_thrust_direction(mu, F, mee, lam):
     return (mat.flatten() / np.linalg.norm(mat))
 
 # === Monte Carlo Segment ===
-def monte_carlo_segment(r0, v0, m0_val, lam, t0, t1, num_samples=500):
+def monte_carlo_segment(r0, v0, m0_val, lam, t0, t1, num_samples=1000):
     mean = np.hstack([r0.flatten(), v0.flatten(), m0_val])
     samples = np.random.multivariate_normal(mean, P_init, size=num_samples)
     r_trajs = []
@@ -221,7 +221,7 @@ def evaluate_and_plot_segment(X, y, model, scaler, scaler_y, Wm, Wc, label, bund
     control_angle_deg = np.degrees(np.arccos(dot))
 
     lam0 = get_row(t0, 0, is_y=True)
-    mc_traj = monte_carlo_segment(r0, v0, m_ref, lam0, t0, t1, num_samples=500)
+    mc_traj = monte_carlo_segment(r0, v0, m_ref, lam0, t0, t1, num_samples=1000)
     r_mc_end = np.array([traj[-1] for traj in mc_traj])
     mu_mc = np.mean(r_mc_end, axis=0)
     cov_mc = np.einsum("ni,nj->ij", r_mc_end - mu_mc, r_mc_end - mu_mc) / r_mc_end.shape[0]
@@ -254,7 +254,7 @@ def evaluate_and_plot_segment(X, y, model, scaler, scaler_y, Wm, Wc, label, bund
         ax.scatter(r_pred[i, 0], r_pred[i, 1], r_pred[i, 2],
                 color='black', marker='X', s=8, zorder=1)
 
-    for j in range(0, len(mc_traj), 5):
+    for j in range(0, len(mc_traj), 10):
         traj = mc_traj[j]
         ax.plot(traj[:, 0], traj[:, 1], traj[:, 2],
                 linestyle=':', color='dimgray', lw=0.8, alpha=0.4, zorder=3)
@@ -343,7 +343,7 @@ def main():
             if res: results.append(res)
 
     df = pd.DataFrame(results)
-    df.to_csv("eval_tcn_outputs/metrics_summary.csv", index=False)
+    df.to_csv("eval_tcn_outputs/metrics_summary_tcn.csv", index=False)
     print(df)
 
 if __name__ == "__main__":

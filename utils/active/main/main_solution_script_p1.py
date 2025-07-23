@@ -219,7 +219,7 @@ def main():
                 plot_3sigma_ellipsoid(ax, mu_sigma[0, 0, :3], P_sigma[0, 0, :3, :3])
                 plot_3sigma_ellipsoid(ax, mu_sigma[0, -1, :3], P_sigma[0, -1, :3, :3])
 
-                for j in range(0, len(mc_traj[0][0]), 5):
+                for j in range(0, len(mc_traj[0][0]), 10):
                     full_mc = np.concatenate([seg[j] for seg in mc_traj[0]], axis=0)
                     ax.plot(full_mc[:, 0], full_mc[:, 1], full_mc[:, 2], linestyle=':', color='dimgray', lw=0.8, alpha=0.4, zorder=3)
                     ax.scatter(full_mc[0, 0], full_mc[0, 1], full_mc[0, 2], color='0.4', s=8, marker='o', alpha=0.3,zorder=1)
