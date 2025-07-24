@@ -8,11 +8,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from numpy.linalg import eigh
 from scipy.integrate import solve_ivp
-plt.rcParams.update({'font.size': 10})
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-# === Setup ===
-warnings.filterwarnings("ignore", category=UserWarning)
 plt.rcParams.update({'font.size': 10})
+warnings.filterwarnings("ignore", category=UserWarning)
 os.environ['LGBM_LOGLEVEL'] = '2'
 
 import sys
@@ -55,6 +55,41 @@ def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.25, scale=3.0):
     ax.plot_wireframe(ellipsoid[..., 0], ellipsoid[..., 1], ellipsoid[..., 2],
                       rstride=5, cstride=5, color='k', alpha=0.2, linewidth=0.3)
 
+def compute_thrust_direction(mu, F, mee, lam):
+    p, f, g, h, k, L = mee[:-1]
+    lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = lam[:-1]
+    lam_matrix = np.array([[lam_p, lam_f, lam_g, lam_h, lam_k, lam_L]]).T
+    SinL, CosL = np.sin(L), np.cos(L)
+    w = 1 + f * CosL + g * SinL
+    if np.isclose(w, 0, atol=1e-10):
+        return np.full(3, np.nan)
+    s = 1 + h**2 + k**2
+    C1 = np.sqrt(p / mu)
+    C2 = 1 / w
+    C3 = h * SinL - k * CosL
+    A = np.array([
+        [0, 2 * p * C2 * C1, 0],
+        [C1 * SinL, C1 * C2 * ((w + 1) * CosL + f), -C1 * (g / w) * C3],
+        [-C1 * CosL, C1 * C2 * ((w + 1) * SinL + g), C1 * (f / w) * C3],
+        [0, 0, C1 * s * CosL * C2 / 2],
+        [0, 0, C1 * s * SinL * C2 / 2],
+        [0, 0, C1 * C2 * C3]
+    ])
+    mat = A.T @ lam_matrix
+    return mat.flatten() / np.linalg.norm(mat)
+
+def numerical_jacobian_mee2rv(mee_nom, mu, eps=1e-6):
+    rv0 = mee2rv(*mee_nom[:6], mu)[0].flatten()
+    J = np.zeros((6, 6))  # Only w.r.t. p, f, g, h, k, L
+
+    for i in range(6):
+        perturbed = mee_nom.copy()
+        perturbed[i] += eps
+        rv_perturbed = mee2rv(*perturbed[:6], mu)[0].flatten()
+        J[:, i] = (rv_perturbed - rv0) / eps
+
+    return J
+
 def main():
     model = joblib.load("trained_model.pkl")
     scaler = joblib.load("scaler.pkl")
@@ -65,42 +100,37 @@ def main():
     tf = t_vals[-1]
     os.makedirs("uncertainty_aware_outputs", exist_ok=True)
 
-    t_fracs = [0.90, 0.925, 0.95]
+    t_fracs = [0.925, 0.95]
     diag_mins = np.array([9.098224e+01, 7.082445e-04, 6.788599e-04, 1.376023e-08, 2.346605e-08, 5.885859e-08, 1.000000e-04])
     diag_maxs = np.array([1.977489e+03, 6.013501e-03, 5.173225e-03, 4.284912e-04, 1.023625e-03, 6.818500e+00, 1.000000e-04])
     P_models = {'min': np.diag(diag_mins), 'max': np.diag(diag_maxs)}
-
     P_cart = np.block([
         [np.eye(3)*0.01,       np.zeros((3,3)), np.zeros((3,1))],
         [np.zeros((3,3)), np.eye(3)*0.0001,     np.zeros((3,1))],
         [np.zeros((1,3)), np.zeros((1,3)),      np.array([[0.0001]])]
     ])
-
     F_val = 0.9 * F_nom
     summary = []
 
     for t_frac in t_fracs:
         t_k = t_frac * tf
+        print(f"[t_frac = {t_frac:.3f}] Replanning at time t_k = {t_k:.2f} TU")
         idx = np.argmin(np.abs(t_vals - t_k))
         r0, v0, m0_val = r_nom[idx], v_nom[idx], mass_nom[idx]
         state_k = np.hstack([r0, v0, m0_val])
-
-        # === Draw shared MC samples at this t_k ===
-        shared_samples = np.random.multivariate_normal(state_k, P_cart, size=500)
+        shared_samples = np.random.multivariate_normal(state_k, P_cart, size=1000)
 
         for level, P_model in P_models.items():
-            print(f"[{t_frac:.2f}] Level: {level} — propagating shared MC set...")
-
+            print(f"  Level: {level} — propagating MC...")
             mc_endpoints = []
             fig = plt.figure(figsize=(6.5, 5.5))
             ax = fig.add_subplot(111, projection='3d')
 
-            # Plot nominal trajectory
             ax.plot(r_nom[:, 0], r_nom[:, 1], r_nom[:, 2], color='black', lw=2.0, label="Nominal")
             ax.scatter(*r0, color='black', s=20, label="Start", zorder=5)
             ax.scatter(*r_nom[-1], color='black', s=20, marker='X', label="End", zorder=5)
 
-            for s in shared_samples:
+            for i, s in enumerate(shared_samples):
                 try:
                     mee = np.hstack([rv2mee(s[:3].reshape(1, 3), s[3:6].reshape(1, 3), mu).flatten(), s[6]])
                     x_input = np.hstack([t_k, mee, np.diag(P_model)])
@@ -108,30 +138,59 @@ def main():
                         't', 'p', 'f', 'g', 'h', 'L', 'mass',
                         'dummy1', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'
                     ])
-                    lam = model.predict(scaler.transform(x_df))[0]
+                    lam = model.predict(x_df)[0]
+                    u_hat = compute_thrust_direction(mu, F_val, mee, lam)
+                    if not np.isnan(u_hat).any():
+                        ax.quiver(*s[:3], *u_hat, length=100, normalize=True,
+                                color='0.5', linewidth=0.6, alpha=0.5)
                     S = np.hstack([mee, lam])
                     sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0),
                                     [t_k, tf], S, t_eval=np.linspace(t_k, tf, 100))
                     r, _ = mee2rv(*sol.y[:6], mu)
+                    if i % 10 == 0:
+                        ax.plot(r[:, 0], r[:, 1], r[:, 2], linestyle=':', color='0.6', lw=0.8, alpha=0.3)
+                        ax.scatter(*r[0], color='0.6', s=5, alpha=0.25)
+                        ax.scatter(*r[-1], color='0.6', s=5, marker='X', alpha=0.25)
                     mc_endpoints.append(r[-1])
-                    ax.plot(r[:, 0], r[:, 1], r[:, 2],
-                            linestyle=':', color='0.6', lw=0.8, alpha=0.3)
-                    ax.scatter(*r[0], color='0.6', s=5, alpha=0.25)
-                    ax.scatter(*r[-1], color='0.6', s=5, marker='X', alpha=0.25)
                 except:
                     continue
 
-            if len(mc_endpoints) == 0:
-                print("[WARN] No valid trajectories.")
-                continue
-
             mc_endpoints = np.array(mc_endpoints)
             mu_mc = np.mean(mc_endpoints, axis=0)
-            cov_mc = np.cov(mc_endpoints.T)
+            cov_mc = np.einsum("ni,nj->ij", mc_endpoints - mu_mc, mc_endpoints - mu_mc) / mc_endpoints.shape[0]
             eigvals = np.maximum(np.linalg.eigvalsh(cov_mc), 0)
             volume = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals))
-
             plot_3sigma_ellipsoid(ax, mu_mc, cov_mc, color='gray', alpha=0.25)
+
+            # === Inset: zoom near final MC region
+            inset_ax = fig.add_axes([0.63, 0.63, 0.34, 0.34], projection='3d')
+            for i, s in enumerate(shared_samples[::10]):
+                try:
+                    mee = np.hstack([rv2mee(s[:3].reshape(1, 3), s[3:6].reshape(1, 3), mu).flatten(), s[6]])
+                    x_input = np.hstack([t_k, mee, np.diag(P_model)])
+                    x_df = pd.DataFrame([x_input], columns=[
+                        't', 'p', 'f', 'g', 'h', 'L', 'mass',
+                        'dummy1', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'
+                    ])
+                    lam = model.predict(x_df)[0]
+                    S = np.hstack([mee, lam])
+                    sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0),
+                                    [t_k, tf], S, t_eval=np.linspace(t_k, tf, 100))
+                    r, _ = mee2rv(*sol.y[:6], mu)
+                    inset_ax.scatter(*r[-1], color='0.6', s=5, marker='X', alpha=0.5)
+                except:
+                    continue
+
+            plot_3sigma_ellipsoid(inset_ax, mu_mc, cov_mc, color='gray', alpha=0.3)
+            center = mu_mc
+            radius = np.max(np.linalg.norm(mc_endpoints - center, axis=1)) * 1.2
+            inset_ax.set_xlim(center[0] - radius, center[0] + radius)
+            inset_ax.set_ylim(center[1] - radius, center[1] + radius)
+            inset_ax.set_zlim(center[2] - radius, center[2] + radius)
+            inset_ax.set_xticks([])
+            inset_ax.set_yticks([])
+            inset_ax.set_zticks([])
+            inset_ax.set_box_aspect([1, 1, 1])
 
             ax.set_xlabel("X [km]")
             ax.set_ylabel("Y [km]")
@@ -145,12 +204,13 @@ def main():
                 Line2D([0], [0], linestyle=':', color='0.6', lw=1.0, label='Monte Carlo'),
                 Line2D([0], [0], marker='o', color='black', linestyle='', label='Start', markersize=5),
                 Line2D([0], [0], marker='X', color='black', linestyle='', label='End', markersize=6),
+                Line2D([0], [0], color='0.5', lw=1.5, label='Control (Start)'),
                 Patch(color='gray', alpha=0.25, label='3σ Ellipsoid (MC)')
-            ], loc='upper left', bbox_to_anchor=(0.03, 1.07), frameon=True)
+            ], loc='upper left', bbox_to_anchor=(0.03, 0.95), frameon=True)
 
             plt.tight_layout()
             fname = f"tk{int(t_frac*100)}_unc_{level}.pdf"
-            plt.savefig(os.path.join("uncertainty_aware_outputs", fname), bbox_inches='tight', dpi=600,  pad_inches=0.5)
+            plt.savefig(os.path.join("uncertainty_aware_outputs", fname), bbox_inches='tight', dpi=600, pad_inches=0.5)
             plt.close()
             print(f"[Saved] {fname}")
 
