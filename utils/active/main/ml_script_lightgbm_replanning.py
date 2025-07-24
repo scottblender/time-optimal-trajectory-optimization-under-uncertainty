@@ -78,18 +78,6 @@ def compute_thrust_direction(mu, F, mee, lam):
     mat = A.T @ lam_matrix
     return mat.flatten() / np.linalg.norm(mat)
 
-def numerical_jacobian_mee2rv(mee_nom, mu, eps=1e-6):
-    rv0 = mee2rv(*mee_nom[:6], mu)[0].flatten()
-    J = np.zeros((6, 6))  # Only w.r.t. p, f, g, h, k, L
-
-    for i in range(6):
-        perturbed = mee_nom.copy()
-        perturbed[i] += eps
-        rv_perturbed = mee2rv(*perturbed[:6], mu)[0].flatten()
-        J[:, i] = (rv_perturbed - rv0) / eps
-
-    return J
-
 def main():
     model = joblib.load("trained_model.pkl")
     scaler = joblib.load("scaler.pkl")
