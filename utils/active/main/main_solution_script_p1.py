@@ -110,7 +110,7 @@ def main():
             ax.plot(r_tr[:, 0], r_tr[:, 1], r_tr[:, 2], color='black', linewidth=2, label='Nominal')
             ax.scatter(r_tr[0, 0], r_tr[0, 1], r_tr[0, 2], color='black', marker='o', s=20, label='Start')
             ax.scatter(r_tr[-1, 0], r_tr[-1, 1], r_tr[-1, 2], color='black', marker='X', s=25, label='End')
-            ax.set_xlabel("X [km]"); ax.set_ylabel("Y [km]"); ax.set_zlabel("Z [km]")
+            ax.set_xlabel("X [DU]"); ax.set_ylabel("Y [DU]"); ax.set_zlabel("Z [DU]")
             set_axes_equal(ax)
             set_max_ticks(fig)
             ax.legend(loc='upper left', bbox_to_anchor=(0.03, 0.95))
@@ -225,9 +225,9 @@ def main():
                     ax.scatter(full_mc[0, 0], full_mc[0, 1], full_mc[0, 2], color='0.4', s=8, marker='o', alpha=0.3,zorder=1)
                     ax.scatter(full_mc[-1, 0], full_mc[-1, 1], full_mc[-1, 2], color='0.4', s=8, marker='X', alpha=0.3,zorder=1)
 
-                ax.set_xlabel('X [km]')
-                ax.set_ylabel('Y [km]')
-                ax.set_zlabel('Z [km]')
+                ax.set_xlabel('X [DU]')
+                ax.set_ylabel('Y [DU]')
+                ax.set_zlabel('Z [DU]')
                 set_axes_equal(ax)
                 set_max_ticks(fig)
                 ax.legend(handles=[

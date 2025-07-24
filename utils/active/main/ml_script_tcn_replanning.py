@@ -218,9 +218,9 @@ def main():
             inset_ax.set_zticks([])
             inset_ax.set_box_aspect([1, 1, 1])
 
-            ax.set_xlabel("X [km]")
-            ax.set_ylabel("Y [km]")
-            ax.set_zlabel("Z [km]")
+            ax.set_xlabel("X [DU]")
+            ax.set_ylabel("Y [DU]")
+            ax.set_zlabel("Z [DU]")
             set_axes_equal(ax)
             ax.legend(handles=[
                     Line2D([0], [0], color='black', lw=2.0, label='Nominal'),
