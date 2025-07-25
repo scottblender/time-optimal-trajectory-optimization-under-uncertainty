@@ -147,6 +147,7 @@ def main():
             mu_mc = np.mean(mc_endpoints, axis=0)
             cov_mc = np.einsum("ni,nj->ij", mc_endpoints - mu_mc, mc_endpoints - mu_mc) / mc_endpoints.shape[0]
             eigvals = np.maximum(np.linalg.eigvalsh(cov_mc), 0)
+            print(eigvals)
             volume = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals))
             plot_3sigma_ellipsoid(ax, mu_mc, cov_mc, color='gray', alpha=0.25)
 
