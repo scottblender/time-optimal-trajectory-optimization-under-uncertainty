@@ -36,7 +36,7 @@ def _solve_mc_single_bundle(args):
         forwardTspan = backTspan[::-1]
         time = forwardTspan[time_steps]
         substeps = 10
-        evals_per_substep = 20
+        evals_per_substep = 5
         steps_per_segment = substeps * evals_per_substep
         num_segments = num_time_steps - 1
         total_steps = num_samples * steps_per_segment * num_segments
@@ -140,9 +140,27 @@ def generate_monte_carlo_trajectories_parallel(
     sigmas_combined, new_lam_bundles, mu, F, c, m0, g0,
     global_bundle_indices, num_samples=1000, num_workers=4
 ):
-    P_pos = np.eye(3) * 0.01
-    P_vel = np.eye(3) * 0.0001
-    P_mass = np.array([[0.0001]])
+    DU = 696340       # 696,340 km
+    g0_s = 9.81/1000
+    TU = np.sqrt(DU / g0_s)  # time unit in seconds
+    MU = 4000           # kg
+    VU = DU / TU        # velocity unit in km/s
+
+   # Dimensional covariances (in km^2, (km/s)^2, kg^2)
+    P_pos_km2 = 1e-6
+    P_vel_kms2 = 1e-6
+    P_mass_kg2 = 1e-2
+
+    # Non-dimensional covariances
+    P_pos_nd = P_pos_km2 / (DU**2)
+    P_vel_nd = P_vel_kms2 / (VU**2)
+    P_mass_nd = P_mass_kg2 / (MU**2)
+
+    # Build diagonal matrices
+    P_pos = np.eye(3)*P_pos_nd
+    P_vel = np.eye(3)*P_vel_nd
+    P_mass = P_mass_nd 
+
     P_init = np.block([
         [P_pos, np.zeros((3, 3)), np.zeros((3, 1))],
         [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
@@ -151,7 +169,7 @@ def generate_monte_carlo_trajectories_parallel(
     P_control = np.eye(7) * 0.001
 
     substeps = 10
-    evals_per_substep = 20
+    evals_per_substep = 5
     total = len(global_bundle_indices) * (num_time_steps - 1) * num_samples * substeps * evals_per_substep
 
     manager = Manager()

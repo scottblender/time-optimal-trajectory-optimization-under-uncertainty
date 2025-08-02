@@ -41,7 +41,7 @@ def _solve_single_bundle(args):
 
         num_sigma = sigmas_combined.shape[1]
         substeps = 10
-        evals_per_substep = 20
+        evals_per_substep = 5
         steps_per_segment = substeps * evals_per_substep
         num_segments = num_time_steps - 1
         total_rows = num_sigma * steps_per_segment * num_segments
@@ -51,7 +51,7 @@ def _solve_single_bundle(args):
         row_idx = 0
         X_extra_rows = []
         y_extra_rows = []
-
+        
         for j in range(num_segments):
             tstart, tend = time[j], time[j + 1]
             sigma_combined = sigmas_combined[bundle_index_local, :, :, j]
@@ -172,7 +172,7 @@ def solve_trajectories_with_covariance_parallel_with_progress(
 ):
     num_sigma = sigmas_combined.shape[1]
     substeps = 10
-    evals_per_substep = 20
+    evals_per_substep = 5
     total_steps = len(global_bundle_indices) * (num_time_steps - 1) * num_sigma * substeps * evals_per_substep
 
     manager = Manager()

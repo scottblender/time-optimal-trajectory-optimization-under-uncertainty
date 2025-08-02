@@ -58,7 +58,7 @@ def main():
     p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
 
     num_bundles = 50
-    time_resolution_list = np.arange(1000, 12001, 1000)  # in minutes
+    time_resolution_list = np.arange(100, 1001, 100)  # in minutes
 
     for time_resolution_minutes in time_resolution_list:
         print(f"\n[INFO] Generating bundle data at {time_resolution_minutes} min resolution...")
