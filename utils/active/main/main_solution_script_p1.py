@@ -78,7 +78,7 @@ def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
     return max(kl_div, 0.0)
 
 def main():
-    stride_minutes_list = np.arange(100, 1001, 100)
+    stride_minutes_list = np.arange(1000, 12001, 1000)
 
     for stride_minutes in stride_minutes_list:
         start_time = time.time()
@@ -153,36 +153,12 @@ def main():
                 out_dir = f"{out_root}/segment_{label}_{mode}_bundle_{bundle_idx}"
                 os.makedirs(out_dir, exist_ok=True)
 
-                DU = 696340e3 
-                g0_s = 9.81
-                TU = np.sqrt(DU / g0_s)  # time unit in seconds
-                MU = 4000           # kg
-                VU = DU / TU        # velocity unit in km/s
-
-                # Dimensional covariances (in km^2, (km/s)^2, kg^2)
-                P_pos_km2 = 1e-2*1e6
-                P_vel_kms2 = 1e-4*1e6
-                P_mass_kg2 = 1e-2
-
-                # Non-dimensional covariances
-                P_pos_nd = P_pos_km2 / (DU**2)
-                P_vel_nd = P_vel_kms2 / (VU**2)
-                P_mass_nd = P_mass_kg2 / (MU**2)
-
                 sigmas_combined, _, _, _, Wm, Wc = generate_sigma_points.generate_sigma_points(
-                    nsd=7, alpha=3/np.sqrt(3), beta=2, kappa=3.-7,
-                    P_pos=np.eye(3)*P_pos_nd, P_vel=np.eye(3)*P_vel_nd, P_mass=np.array([[P_mass_nd]]),
+                    nsd=7, alpha=np.sqrt(9 / (7 + (3 - 7))), beta=2, kappa=(3 - 7),
+                    P_pos=np.eye(3)*0.01, P_vel=np.eye(3)*0.0001, P_mass=np.array([[0.0001]]),
                     time_steps=time_steps, r_bundles=r0, v_bundles=v0, mass_bundles=m0s,
                     num_workers=os.cpu_count()
                 )
-
-                print("\n[DEBUG] --- Sigma Point vs Bundle Alignment ---")
-                print("Bundle r0 (r0[0,:,0]):", r0[idx, :, 0])
-                print("Bundle r0 (r0[0,:,0]):", r0[idx, :, 0])
-                print("Sigma point r0 (sigmas_combined[0,0,:3,0]):", sigmas_combined[0, 0, :3, 0])
-                print("Δr:", np.linalg.norm(sigmas_combined[0, 0, :3, 0] - r0[idx, :, 0]), "DU")
-                print("-----------------------------------------------\n")
-
 
                 traj, P_sigma_list, mu_sigma_list, X_sigma, _ = solve_trajectories_with_covariance_parallel_with_progress(
                     backTspan, time_steps, 2,
@@ -199,18 +175,15 @@ def main():
                 )
 
                 P_sigma = P_sigma_list[0]
+                # === Debug print to compare sigma covariance at segment start ===
+                P_init_diag = np.array([0.01, 0.01, 0.01])
+                P_sigma_start_diag = np.diag(P_sigma[0, 0, :3, :3])
+
+                print(f"[DEBUG] {label.upper()} / {mode} / Bundle {bundle_idx} — Segment Start Covariance Check:")
+                print(f"    Empirical Sigma Cov Diag at t0: {P_sigma_start_diag}")
+                print(f"    Expected P_init Diag:           {P_init_diag}")
+                print(f"    Ratio:                          {P_sigma_start_diag / P_init_diag}")
                 mu_sigma = mu_sigma_list[0]
-
-                delta = mu_sigma[0, -1] - mu_mc[0, 0, -1]
-                quad_term = delta.T @ inv(P_mc[0,0,-1] + 1e-12*np.eye(7)) @ delta
-                trace_term = np.trace(inv(P_mc[0,0,-1]) @ P_sigma[0, -1])
-                _, logdet1 = np.linalg.slogdet(P_sigma[0, -1])
-                _, logdet2 = np.linalg.slogdet(P_mc[0,0,-1])
-                logdet_term = logdet2 - logdet1
-                print("Quadratic term (mean mismatch):", quad_term)
-                print("Trace term:", trace_term)
-                print("Log-det term:", logdet_term)
-
                 kl_vals = [compute_kl_divergence(mu_sigma[0, t], P_sigma[0, t], mu_mc[0, 0, t], P_mc[0, 0, t])
                            for t in range(P_sigma.shape[1])]
                 np.savetxt(f"{out_dir}/kl_divergence.txt", kl_vals, fmt="%.6f")
@@ -230,64 +203,6 @@ def main():
                 trajs = [np.concatenate([seg[i] for seg in traj[0]], axis=0) for i in range(len(traj[0][0]))]
                 mahal = [np.sqrt((x[-1, :7] - sigma0_final) @ inv(P_final + 1e-10*np.eye(7)) @ (x[-1, :7] - sigma0_final)) for x in trajs[1:]]
                 np.savetxt(f"{out_dir}/mahalanobis_distances.txt", mahal, fmt="%.6f")
-
-                P_sigma = P_sigma_list[0]
-                P_mc = P_mc[0, 0]  # shape: [T, 7, 7]
-
-                print("[DEBUG] Sigma Cov Diag (t0):", np.diag(P_sigma[0, 0, :3, :3]))
-                print("[DEBUG] MC Cov Diag (t0):   ", np.diag(P_mc[0, :3, :3]))
-                print(f"[DEBUG] Sigma Cov Diag at tf: {np.diag(P_sigma[0, -1, :3, :3])}")
-                print(f"[DEBUG] MC Cov Diag at tf:    {np.diag(P_mc[-1, :3, :3])}")
-
-                def compute_3sigma_volume(cov_du2, DU):
-                    # Convert from DU² to km²
-                    cov_m2 = cov_du2 * DU**2
-                    cov_km2 = cov_m2 / 1e6 
-                    cov_km2 = 0.5 * (cov_km2 + cov_km2.T) + np.eye(3) * 1e-12
-                    eigvals = np.linalg.eigvalsh(cov_km2)
-                    if np.any(eigvals <= 0): return 0.0
-                    det_P = np.prod(eigvals)
-                    return 36 * np.pi * np.sqrt(det_P)
-                
-                print("[CHECK] P_sigma at t0 in km²:", np.diag(P_sigma[0,0,:3,:3]) * DU**2/1e6)
-                print("[CHECK] P_sigma at tf in km²:", np.diag(P_sigma[0,-1,:3,:3]) * DU**2/1e6)
-
-                vol_t0 = compute_3sigma_volume(P_sigma[0, 0, :3, :3], DU)
-                vol_tf = compute_3sigma_volume(P_sigma[0, -1, :3, :3], DU)
-                print(f"[CHECK] Volume t0: {vol_t0:.6f} km³, Volume tf: {vol_tf:.6f} km³")
-                
-                volumes = {
-                    "sigma_t0": compute_3sigma_volume(P_sigma[0, 0, :3, :3], DU),
-                    "sigma_tf": compute_3sigma_volume(P_sigma[0, -1, :3, :3], DU),
-                    "mc_t0": compute_3sigma_volume(P_mc[0, :3, :3], DU),
-                    "mc_tf": compute_3sigma_volume(P_mc[-1, :3, :3], DU)
-                }
-
-                volume_outfile = os.path.join(out_dir, "ellipsoid_volumes.txt")
-                with open(volume_outfile, "w") as f:
-                    for key, val in volumes.items():
-                        f.write(f"{key}: {val:.6e} km^3\n")
-                print("[INFO] 3-sigma ellipsoid volumes saved:", volume_outfile)
-
-                print("\n[SIGMA TRAJECTORY DEBUG]")
-                for i in range(len(traj[0][0])):
-                    full = np.concatenate([seg[i] for seg in traj[0]], axis=0)
-                    r0, rf = full[0, :3], full[-1, :3]
-                    print(f"  Sigma {i:02d}: r0 = {r0}, rf = {rf}, Δr = {np.linalg.norm(rf - r0):.3f} DU")
-
-                print("\n[MC TRAJECTORY DEBUG]")
-                for i in range(min(10, len(mc_traj[0][0]))):  # Print only first 10 for brevity
-                    full = np.concatenate([seg[i] for seg in mc_traj[0]], axis=0)
-                    r0, rf = full[0, :3], full[-1, :3]
-                    print(f"  MC {i:02d}: r0 = {r0}, rf = {rf}, Δr = {np.linalg.norm(rf - r0):.3f} DU")
-
-                r_start_bundle = r_b[idx, :, bundle_idx]
-                r_end_bundle = r_b[idx + 1, :, bundle_idx]
-                delta_r_bundle = np.linalg.norm(r_end_bundle - r_start_bundle)
-
-                print(f"[BUNDLE SEGMENT DEBUG] Raw bundle r0 = {r_start_bundle}")
-                print(f"[BUNDLE SEGMENT DEBUG] Raw bundle rf = {r_end_bundle}")
-                print(f"[BUNDLE SEGMENT DEBUG] Raw Δr = {delta_r_bundle:.6f} DU ({delta_r_bundle * DU:.2f} km)")
 
                 fig = plt.figure(figsize=(6.5, 5.5))
                 ax = fig.add_subplot(111, projection='3d')
@@ -313,7 +228,6 @@ def main():
                 ax.set_xlabel('X [DU]')
                 ax.set_ylabel('Y [DU]')
                 ax.set_zlabel('Z [DU]')
-                ax.grid(False)
                 set_axes_equal(ax)
                 set_max_ticks(fig)
                 ax.legend(handles=[
