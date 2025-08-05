@@ -16,6 +16,17 @@ def _generate_sigma_points_for_bundle(i, nsd, time_steps, P_combined, r_bundles,
             [mass_bundles[time_steps[j], i]]
         ])
         sigmas[:, :, j] = weights.sigma_points(nominal_combined, P_combined)
+        # Only run check on j=0 for speed
+        if j == 0:
+            nominal = nominal_combined
+            sp_j = sigmas[:, :, j]
+            mean_sp = np.sum(weights.Wm[:, None] * sp_j, axis=0)
+            diffs = sp_j - mean_sp
+            cov_sp = np.einsum("i,ij,ik->jk", weights.Wc, diffs, diffs)
+
+            print(f"\n[SP CHECK] Bundle {i}, t_idx={j}")
+            print("→ Mean diff norm:", np.linalg.norm(mean_sp - nominal))
+            print("→ Cov diff max rel error:", np.max(np.abs(P_combined - cov_sp) / np.maximum(P_combined, 1e-15)))
 
     return sigmas
 

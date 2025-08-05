@@ -62,23 +62,54 @@ def set_max_ticks(fig, n=5):
         if hasattr(ax, 'zaxis'):
             ax.zaxis.set_major_locator(MaxNLocator(nbins=5))
 
-def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
+def compute_kl_divergence(mu1, sigma1, mu2, sigma2, epsilon=1e-10):
+    """
+    Computes KL divergence D_KL(P || Q) between two Gaussians:
+        P ~ N(mu1, sigma1), Q ~ N(mu2, sigma2)
+
+    Applies regularization to ensure invertibility and uses pseudo-inverse for stability.
+    """
     k = mu1.shape[0]
-    sigma2_inv = np.linalg.inv(sigma2)
-    trace_term = np.trace(sigma2_inv @ sigma1)
+
+    # --- Regularize both covariances ---
+    sigma1_reg = sigma1 + np.eye(k) * epsilon
+    sigma2_reg = sigma2 + np.eye(k) * epsilon
+
+    # --- Attempt pseudo-inverse for numerical safety ---
+    try:
+        sigma2_inv = np.linalg.pinv(sigma2_reg)
+    except np.linalg.LinAlgError:
+        print("[ERROR] σ₂ inverse failed even with pseudo-inverse fallback.")
+        return np.inf
+
+    trace_term = np.trace(sigma2_inv @ sigma1_reg)
     diff = mu2 - mu1
     quadratic_term = diff.T @ sigma2_inv @ diff
-    sign1, logdet1 = np.linalg.slogdet(sigma1)
-    sign2, logdet2 = np.linalg.slogdet(sigma2)
+
+    # --- Log determinant using regularized matrices ---
+    sign1, logdet1 = np.linalg.slogdet(sigma1_reg)
+    sign2, logdet2 = np.linalg.slogdet(sigma2_reg)
+
     if sign1 <= 0 or sign2 <= 0:
-        print(f"[WARN] Non-positive-definite covariance matrix detected")
-        return 0.0
+        print(f"[WARN] Non-positive-definite covariance matrix detected after regularization")
+        return np.inf
+
     log_det_term = logdet2 - logdet1
     kl_div = 0.5 * (trace_term + quadratic_term - k + log_det_term)
+
+    # --- Debug Info ---
+    print(f"[KL DEBUG] trace = {trace_term:.4f}, quad = {quadratic_term:.4f}, log_det = {log_det_term:.4f}, total = {kl_div:.4f}")
+    evals_sp = np.linalg.eigvalsh(sigma1_reg)
+    evals_mc = np.linalg.eigvalsh(sigma2_reg)
+    print(f"  SP eigenvalues: {np.round(evals_sp, 3)}")
+    print(f"  MC eigenvalues: {np.round(evals_mc, 3)}")
+    print(f"  SP min/max: {evals_sp.min():.2e} / {evals_sp.max():.2e}")
+    print(f"  MC min/max: {evals_mc.min():.2e} / {evals_mc.max():.2e}")
+
     return max(kl_div, 0.0)
 
 def main():
-    stride_minutes_list = np.arange(1000, 12001, 1000)
+    stride_minutes_list = np.arange(100, 1001, 100)
 
     for stride_minutes in stride_minutes_list:
         start_time = time.time()
@@ -153,9 +184,24 @@ def main():
                 out_dir = f"{out_root}/segment_{label}_{mode}_bundle_{bundle_idx}"
                 os.makedirs(out_dir, exist_ok=True)
 
+                DU_km = 696340.0  # Sun radius in km
+                g0_s = 9.81
+                TU = np.sqrt(DU_km / g0_s)
+                VU_kms = DU_km / TU # Convert m/s to km/s using g0
+
+                # Set desired physical covariances (e.g., 0.1 km², 1e-4 (km/s)², 1 kg²)
+                P_pos_km2 = np.eye(3) * 0.1        # km²
+                P_vel_kms2 = np.eye(3) * 1e-6     # (km/s)²
+                P_mass_kg2 = np.array([[1e-2]])     # kg²
+
+                # Convert to non-dimensional units for input
+                P_pos = P_pos_km2 / (DU_km**2)
+                P_vel = P_vel_kms2 / (VU_kms**2)
+                P_mass = P_mass_kg2 / (4000**2)
+
                 sigmas_combined, _, _, _, Wm, Wc = generate_sigma_points.generate_sigma_points(
                     nsd=7, alpha=np.sqrt(9 / (7 + (3 - 7))), beta=2, kappa=(3 - 7),
-                    P_pos=np.eye(3)*0.01, P_vel=np.eye(3)*0.0001, P_mass=np.array([[0.0001]]),
+                    P_pos=P_pos, P_vel=P_vel, P_mass=P_mass,
                     time_steps=time_steps, r_bundles=r0, v_bundles=v0, mass_bundles=m0s,
                     num_workers=os.cpu_count()
                 )
@@ -176,7 +222,7 @@ def main():
 
                 P_sigma = P_sigma_list[0]
                 # === Debug print to compare sigma covariance at segment start ===
-                P_init_diag = np.array([0.01, 0.01, 0.01])
+                P_init_diag = np.diag(P_pos)
                 P_sigma_start_diag = np.diag(P_sigma[0, 0, :3, :3])
 
                 print(f"[DEBUG] {label.upper()} / {mode} / Bundle {bundle_idx} — Segment Start Covariance Check:")
@@ -186,10 +232,44 @@ def main():
                 mu_sigma = mu_sigma_list[0]
                 kl_vals = [compute_kl_divergence(mu_sigma[0, t], P_sigma[0, t], mu_mc[0, 0, t], P_mc[0, 0, t])
                            for t in range(P_sigma.shape[1])]
+                # === Optional: Mahalanobis distance squared per timestep ===
+                for t in range(P_sigma.shape[1]):
+                    diff = mu_sigma[0, t] - mu_mc[0, 0, t]
+                    cov_inv = inv(P_mc[0, 0, t] + 1e-12 * np.eye(7))  # add epsilon for safety
+                    d2 = diff.T @ cov_inv @ diff
+                    print(f"[MAHAL@t={t:02d}] Mahalanobis² = {d2:.3f} — |μ_SP − μ_MC| = {np.linalg.norm(diff):.3e}")
                 np.savetxt(f"{out_dir}/kl_divergence.txt", kl_vals, fmt="%.6f")
                 np.savetxt(f"{out_dir}/cov_sigma_final.txt", P_sigma[0, -1], fmt="%.6f")
                 np.savetxt(f"{out_dir}/cov_mc_final.txt", P_mc[0, 0, -1], fmt="%.6f")
 
+                print(f"MC: {np.diag(P_mc[0,0,-1])}")
+                print(f"SP: {np.diag(P_sigma[0,-1])}")
+
+                delta_mu = mu_sigma - mu_mc
+                mean_error_norm = np.linalg.norm(delta_mu)  # in DU or km
+                print(f"[DEBUG] Mean difference norm: {mean_error_norm:.6f}")
+                cov_norms = []
+                for t in range(P_sigma.shape[1]):
+                    P_sp = P_sigma[0, t]
+                    P_mc_t = P_mc[0, 0, t]
+
+                    cov_diff = P_sp - P_mc_t
+                    frob_norm = np.linalg.norm(cov_diff, ord='fro')  # Frobenius norm
+                    cov_norms.append(frob_norm)
+
+                    print(f"[COV NORM @ t={t:03d}] ‖ΔP‖_F = {frob_norm:.3e}")
+                for t in range(P_sigma.shape[1]):
+                    mu_sp_t = mu_sigma[0, t]  # shape (7,)
+                    mu_mc_t = mu_mc[0, 0, t]  # shape (7,)
+                    delta_mu = mu_sp_t - mu_mc_t
+
+                    P_sp = P_sigma[0, t]
+                    P_mc_t = P_mc[0, 0, t]
+
+                    D2_sp = delta_mu.T @ inv(P_sp) @ delta_mu
+                    D2_mc = delta_mu.T @ inv(P_mc_t) @ delta_mu
+
+                    print(f"[MHAL@t={t:03d}] SP = {D2_sp:.2e}, MC = {D2_mc:.2e}, Δ = {abs(D2_sp - D2_mc):.2e}")
                 final_time = forwardTspan[idx + 1]
                 mask = np.isclose(X_sigma[:, 0], final_time) & (X_sigma[:, -2] == bundle_idx) & (X_sigma[:, -1] == 0) & np.all(X_sigma[:, 8:15] == 0, axis=1)
                 if not np.any(mask):
@@ -206,30 +286,50 @@ def main():
 
                 fig = plt.figure(figsize=(6.5, 5.5))
                 ax = fig.add_subplot(111, projection='3d')
-                for i in range(len(traj[0][0])):
-                    full = np.concatenate([seg[i] for seg in traj[0]], axis=0)
-                    r = full[:, :3]
-                    ax.plot(r[:, 0], r[:, 1], r[:, 2],
+
+                INFLATE_FACTOR = 1e9  # artificially inflate deviations
+                # Reference trajectory: sigma₀
+                traj_array = traj[0][0]  # shape = (15, 200, 7)
+                r_sigma0 = traj_array[0, :, :3]  # sigma 0 position trajectory
+
+                for i in range(1,traj_array.shape[0]):
+                    r = traj_array[i, :, :3]  # shape (200, 3)
+                    delta = (r - r_sigma0)
+                    print(f"[SP {i:02d}] max Δ = {np.max(delta):.3e}, mean Δ = {np.mean(delta):.3e}, Δ = {delta} ")
+
+                    r_inflated = r + INFLATE_FACTOR * (r - r_sigma0)
+
+                    ax.plot(r_inflated[:, 0], r_inflated[:, 1], r_inflated[:, 2],
                             color='black' if i == 0 else 'gray',
                             linestyle='-' if i == 0 else '--',
-                            lw=2.2 if i == 0 else 0.8, alpha=1.0, zorder=5 if i==0 else 4)
-                    ax.scatter(r[0, 0], r[0, 1], r[0, 2], color='black', marker='o', s=10, zorder=1)
-                    ax.scatter(r[-1, 0], r[-1, 1], r[-1, 2], color='black', marker='X', s=10, zorder=1)
+                            lw=2.2 if i == 0 else 0.8, alpha=1.0, zorder=5 if i == 0 else 4)
 
+                    ax.scatter(r_inflated[0, 0], r_inflated[0, 1], r_inflated[0, 2],
+                            color='black' if i == 0 else 'gray', marker='o', s=10, zorder=1, alpha=1.0)
+                    ax.scatter(r_inflated[-1, 0], r_inflated[-1, 1], r_inflated[-1, 2],
+                            color='black' if i == 0 else 'gray', marker='X', s=10, zorder=1, alpha=1.0)
+                
+                # # === Monte Carlo Trajectories (inflated around σ₀) ===
+                # mc_traj_array = mc_traj[0][0]
+                # for j in range(0, mc_traj_array.shape[0], 10):
+                #     r_mc = mc_traj_array[j,:,:3]
+                #     delta = (r_mc - r_sigma0)
+                #     print(f"[MC {j:02d}] max Δ = {np.max(delta):.3e}, mean Δ = {np.mean(delta):.3e}, Δ = {delta} ")
+                #     r_mc_inflated = r_sigma0 + INFLATE_FACTOR * (r_mc - r_sigma0)
+                #     ax.plot(r_mc_inflated[:, 0], r_mc_inflated[:, 1], r_mc_inflated[:, 2],
+                #             linestyle=':', color='dimgray', lw=0.8, alpha=0.4, zorder=3)
+                #     ax.scatter(r_mc_inflated[0, 0], r_mc_inflated[0, 1], r_mc_inflated[0, 2],
+                #             color='0.4', s=8, marker='o', alpha=0.3, zorder=1)
+                #     ax.scatter(r_mc_inflated[-1, 0], r_mc_inflated[-1, 1], r_mc_inflated[-1, 2],
+                #             color='0.4', s=8, marker='X', alpha=0.3, zorder=1)
+                # === 3σ Ellipsoids remain uninflated ===
                 plot_3sigma_ellipsoid(ax, mu_sigma[0, 0, :3], P_sigma[0, 0, :3, :3])
                 plot_3sigma_ellipsoid(ax, mu_sigma[0, -1, :3], P_sigma[0, -1, :3, :3])
 
-                for j in range(0, len(mc_traj[0][0]), 10):
-                    full_mc = np.concatenate([seg[j] for seg in mc_traj[0]], axis=0)
-                    ax.plot(full_mc[:, 0], full_mc[:, 1], full_mc[:, 2], linestyle=':', color='dimgray', lw=0.8, alpha=0.4, zorder=3)
-                    ax.scatter(full_mc[0, 0], full_mc[0, 1], full_mc[0, 2], color='0.4', s=8, marker='o', alpha=0.3,zorder=1)
-                    ax.scatter(full_mc[-1, 0], full_mc[-1, 1], full_mc[-1, 2], color='0.4', s=8, marker='X', alpha=0.3,zorder=1)
-
-                ax.set_xlabel('X [DU]')
-                ax.set_ylabel('Y [DU]')
-                ax.set_zlabel('Z [DU]')
+                # === Auto-zoom ===
                 set_axes_equal(ax)
                 set_max_ticks(fig)
+
                 ax.legend(handles=[
                     Line2D([0], [0], color='black', lw=2.2, label='Sub-nominal Mean State'),
                     Line2D([0], [0], color='gray', lw=0.8, linestyle='--', label='Sigma Points'),
@@ -238,6 +338,7 @@ def main():
                     Line2D([0], [0], marker='X', color='black', linestyle='', label='End', markersize=5),
                     Patch(facecolor='0.5', edgecolor='0.5', alpha=0.2, label='3-σ Ellipsoid')
                 ], loc='upper left', bbox_to_anchor=(0.03, 1.07), frameon=True, facecolor='white')
+
                 plt.savefig(f"{out_dir}/sigma_mc_comparison.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
                 plt.close()
 

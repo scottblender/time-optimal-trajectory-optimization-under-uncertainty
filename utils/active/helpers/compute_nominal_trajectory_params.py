@@ -30,16 +30,16 @@ def compute_nominal_trajectory_params():
     tf_g_LB = 10000 # lower bound of final time
     tf_g_UB = 25000 # upper bound of final time
 
-    # Earth Initial Conditions (position and velocity in km and km/s)
-    R_E_0 = 1e3 * 1e8 * np.array([-0.036378710816509, 1.470997987841786, -0.000022614410420])  # km
-    V_E_0 = 1e3 * np.array([-30.265097988218205, -0.848685467901138, 0.000050530360628])  # km/s
+    # Earth Initial Conditions (position and velocity in m and m/s)
+    R_E_0 = 1e3 * 1e8 * np.array([-0.036378710816509, 1.470997987841786, -0.000022614410420])  # m
+    V_E_0 = 1e3 * np.array([-30.265097988218205, -0.848685467901138, 0.000050530360628])  # m/s
     
     # Dionysus Initial Conditions (position and velocity in km and km/s)
-    R_V_0 = 1e3 * 1e8 * np.array([-3.024520148842469, 3.160971796320275,  0.828722900755180])  # km
-    V_V_0 = 1e3 * np.array([-4.533473799840294, -13.110309800847542, 0.656163826017450]) # km/s
+    R_V_0 = 1e3 * 1e8 * np.array([-3.024520148842469, 3.160971796320275,  0.828722900755180])  # m
+    V_V_0 = 1e3 * np.array([-4.533473799840294, -13.110309800847542, 0.656163826017450]) # m/s
     
     # Constants for the system
-    mu_s = 132712 * 10**6 * 1e9  # km^3/s^2 (Gravitational Parameter for the Sun)
+    mu_s = 132712 * 10**6 * 1e9  # m^3/s^2 (Gravitational Parameter for the Sun)
     g0_s = 9.81  # m/s^2 (Standard Gravity)
     
     # Spacecraft Parameters (Mass and ISP)

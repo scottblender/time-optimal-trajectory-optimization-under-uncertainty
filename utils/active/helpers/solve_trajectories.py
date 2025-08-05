@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.linalg import cond
 import scipy.integrate
 import traceback
 from multiprocessing import Pool, Manager, Process
@@ -57,7 +58,7 @@ def _solve_single_bundle(args):
             sigma_combined = sigmas_combined[bundle_index_local, :, :, j]
             idx_start = time_steps[j]
             new_lam = new_lam_bundles[idx_start, :, bundle_index_local]
-            P_lam = np.eye(7) * 0.001
+            P_lam = np.eye(7) * 1e-8
             sub_times = np.linspace(tstart, tend, substeps + 1)
 
             full_state_sigma_points = []
@@ -85,6 +86,25 @@ def _solve_single_bundle(args):
 
                     if not sol.success:
                         raise RuntimeError("Integration failed.")
+                    
+                    # === DEBUG: Deviation from sigma 0 at substep ===
+                    try:
+                        mee_end = sol.y[:6, -1]  # MEE at end of substep
+                        m_end = sol.y[6, -1]     # Mass (not used here)
+                        r_end, _ = mee2rv(mee_end[0], mee_end[1], mee_end[2],
+                                        mee_end[3], mee_end[4], mee_end[5], mu)
+
+                        if sigma_idx == 0:
+                            if k == 0 and j == 0:
+                                sigma0_end_substeps = []
+                            sigma0_end_substeps.append(r_end.flatten())
+                        else:
+                            deviation = r_end.flatten() - sigma0_end_substeps[k]
+                            dev_norm = np.linalg.norm(deviation)
+                            #print(f"[SUBSTEP DEV] Segment {j}, Substep {k}, σ{sigma_idx}: Δr = {deviation} DU → {dev_norm * 696_340:.2f} km")
+                    except Exception as e:
+                        print(f"[WARN] Substep deviation failure σ{sigma_idx}, substep {k}: {e}")
+
 
                     full_states.append(sol.y.T)
                     time_values.append(sol.t)
@@ -102,7 +122,6 @@ def _solve_single_bundle(args):
                 cartesian = np.hstack((r_eval, v_eval, full_states[:, 6:7]))
                 cartesian_sigma_points.append(cartesian)
                 sigma_point_trajectories.append(cartesian)
-
                 y_rows[row_idx:row_idx + full_states.shape[0], :] = full_states[:, -7:]
                 for step in range(full_states.shape[0]):
                     X_rows[row_idx + step, :] = np.hstack([
@@ -113,7 +132,7 @@ def _solve_single_bundle(args):
                         sigma_idx
                     ])
                 row_idx += full_states.shape[0]
-
+        
             full_state_sigma_points = np.array(full_state_sigma_points)
             cartesian_sigma_points = np.array(cartesian_sigma_points)
 
@@ -127,8 +146,18 @@ def _solve_single_bundle(args):
             P_combined_cartesian = np.einsum("i,ijk,ijl->jkl", Wc, deviations_cartesian, deviations_cartesian)
             P_combined_cartesian_diag = np.array([np.diag(np.diag(P)) for P in P_combined_cartesian])
 
+            # --- Regularize covariance matrices to avoid numerical blow-up ---
+            eps = np.finfo(np.float64).eps
+            for t in range(P_combined_diag.shape[0]):
+                P_combined_diag[t][:, :] += np.eye(P_combined_diag.shape[1]) * eps
+                P_combined_cartesian_diag[t][:, :] += np.eye(P_combined_cartesian_diag.shape[1]) * eps
+
             for t in range(len(P_combined_diag)):
                 cov_diag = np.diag(P_combined_diag[t])
+                eigvals = np.diag(P_combined_cartesian_diag[t])
+                print(f"[DEBUG] SP Cov Diag @ segment {j}, time idx {t}: {eigvals}")
+                cond_num = cond(P_combined_cartesian_diag[t])
+                #print(f"[DEBUG] Condition number at t={t}: {cond_num}")
                 for sigma_idx in range(num_sigma):
                     index = (t * num_sigma) + sigma_idx + (j * num_sigma * steps_per_segment)
                     X_rows[index, 8:15] = cov_diag
@@ -154,7 +183,29 @@ def _solve_single_bundle(args):
         if X_extra_rows:
             X_rows = np.vstack([X_rows, X_extra_rows])
             y_rows = np.vstack([y_rows, y_extra_rows])
+        
+        # === DEBUG: Full end-to-end sigma trajectory final deviations ===
+        try:
+            num_sigmas = len(bundle_trajectories[0])
+            final_positions = []
 
+            for sigma_idx in range(num_sigmas):
+                traj_full = np.vstack([bundle_trajectories[j][sigma_idx] for j in range(num_segments)])
+                final_positions.append(traj_full[-1, :3])
+
+            sigmas_final = np.array(final_positions)
+            sigma0_final = sigmas_final[0]
+            deviations = sigmas_final - sigma0_final
+            norms = np.linalg.norm(deviations, axis=1)
+
+            print("\n[DEV] FINAL full-trajectory deviation from sigma 0 (DU):")
+            for i, dev in enumerate(deviations):
+                print(f"  σ{i}: Δr = {dev} DU → {np.linalg.norm(dev)*696340:.2f} km")
+
+            print(f"→ Max: {np.max(norms):.6e}, Mean: {np.mean(norms):.6e}, Std: {np.std(norms):.6e}")
+            print(f"→ Max in km: {np.max(norms) * 696_340:.2f} km")
+        except Exception as e:
+            print(f"[WARN] Failed to compute full-trajectory deviation: {e}")
         return bundle_trajectories, bundle_P_combined_history, bundle_means_history, X_rows, y_rows
 
     except Exception:

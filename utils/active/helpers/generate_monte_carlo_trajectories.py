@@ -70,14 +70,18 @@ def _solve_mc_single_bundle(args):
                 full_states = []
                 time_vals = []
 
+                prev_lam_mean = lam_nominal
                 for k in range(substeps):
-                    t0, t1 = sub_times[k], sub_times[k + 1]
-                    lam = lam_nominal if k == 0 else sample_within_bounds(lam_nominal, P_control)
+                    if k == 0:
+                        lam = prev_lam_mean
+                    else:
+                        lam = sample_within_bounds(prev_lam_mean, P_control)
+                    prev_lam_mean = lam.copy()
                     S[-7:] = lam
-
+                    t0, t1 = sub_times[k], sub_times[k + 1]
                     t_eval = np.linspace(t0, t1, evals_per_substep)
                     func = lambda t, x: odefunc(t, x, mu, F, c, m0, g0)
-                    sol = solve_ivp(func, [t0, t1], S, t_eval=t_eval, rtol=1e-3, atol=1e-6)
+                    sol = solve_ivp(func, [t0, t1], S, t_eval=t_eval, rtol=1e-6, atol=1e-8)
 
                     if sol.success:
                         full_states.append(sol.y.T)
@@ -140,15 +144,27 @@ def generate_monte_carlo_trajectories_parallel(
     sigmas_combined, new_lam_bundles, mu, F, c, m0, g0,
     global_bundle_indices, num_samples=1000, num_workers=4
 ):
-    P_pos = np.eye(3) * 0.01
-    P_vel = np.eye(3) * 0.0001
-    P_mass = np.array([[0.0001]])
+    DU_km = 696340.0  # Sun radius in km
+    DU_km = 696340.0  # Sun radius in km
+    g0_s = 9.81
+    TU = np.sqrt(DU_km / g0_s)
+    VU_kms = DU_km / TU # Convert m/s to km/s using g0
+
+    # Set desired physical covariances (e.g., 0.1 km², 1e-4 (km/s)², 1 kg²)
+    P_pos_km2 = np.eye(3) * 0.1        # km²
+    P_vel_kms2 = np.eye(3) * 1e-6      # (km/s)²
+    P_mass_kg2 = np.array([[1e-2]])     # kg²
+
+    # Convert to non-dimensional units for input
+    P_pos = P_pos_km2 / (DU_km**2)
+    P_vel = P_vel_kms2 / (VU_kms**2)
+    P_mass = P_mass_kg2 / (4000**2)
     P_init = np.block([
         [P_pos, np.zeros((3, 3)), np.zeros((3, 1))],
         [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
         [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
     ])
-    P_control = np.eye(7) * 0.001
+    P_control = np.eye(7) * 1e-8
 
     substeps = 10
     evals_per_substep = 20
