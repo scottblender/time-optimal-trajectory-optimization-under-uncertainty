@@ -168,7 +168,7 @@ def main():
         print(f"[INFO] Max width at t = {widths_array[max_t_idx, 0]:.2f} TU → {widths_array[max_t_idx, 1]:.6f} km")
         print(f"[INFO] Min width at t = {widths_array[min_t_idx, 0]:.2f} TU → {widths_array[min_t_idx, 1]:.6f} km")
 
-        for label, idx in [("max", max_t_idx), ("min", min_t_idx)]:
+        for label, idx in [("min", min_t_idx),("max", max_t_idx)]:
             dists = np.linalg.norm(r_b[idx] - r_tr[idx][:, np.newaxis], axis=0)
             bundle_farthest = int(np.argmax(dists))
             bundle_closest = int(np.argmin(dists))
@@ -294,11 +294,7 @@ def main():
 
                 for i in range(1,traj_array.shape[0]):
                     r = traj_array[i, :, :3]  # shape (200, 3)
-                    delta = (r - r_sigma0)
-                    print(f"[SP {i:02d}] max Δ = {np.max(delta):.3e}, mean Δ = {np.mean(delta):.3e}, Δ = {delta} ")
-
-                    r_inflated = r + INFLATE_FACTOR * (r - r_sigma0)
-
+                    r_inflated = r_sigma0 + INFLATE_FACTOR * (r - r_sigma0)
                     ax.plot(r_inflated[:, 0], r_inflated[:, 1], r_inflated[:, 2],
                             color='black' if i == 0 else 'gray',
                             linestyle='-' if i == 0 else '--',
@@ -309,22 +305,20 @@ def main():
                     ax.scatter(r_inflated[-1, 0], r_inflated[-1, 1], r_inflated[-1, 2],
                             color='black' if i == 0 else 'gray', marker='X', s=10, zorder=1, alpha=1.0)
                 
-                # # === Monte Carlo Trajectories (inflated around σ₀) ===
-                # mc_traj_array = mc_traj[0][0]
-                # for j in range(0, mc_traj_array.shape[0], 10):
-                #     r_mc = mc_traj_array[j,:,:3]
-                #     delta = (r_mc - r_sigma0)
-                #     print(f"[MC {j:02d}] max Δ = {np.max(delta):.3e}, mean Δ = {np.mean(delta):.3e}, Δ = {delta} ")
-                #     r_mc_inflated = r_sigma0 + INFLATE_FACTOR * (r_mc - r_sigma0)
-                #     ax.plot(r_mc_inflated[:, 0], r_mc_inflated[:, 1], r_mc_inflated[:, 2],
-                #             linestyle=':', color='dimgray', lw=0.8, alpha=0.4, zorder=3)
-                #     ax.scatter(r_mc_inflated[0, 0], r_mc_inflated[0, 1], r_mc_inflated[0, 2],
-                #             color='0.4', s=8, marker='o', alpha=0.3, zorder=1)
-                #     ax.scatter(r_mc_inflated[-1, 0], r_mc_inflated[-1, 1], r_mc_inflated[-1, 2],
-                #             color='0.4', s=8, marker='X', alpha=0.3, zorder=1)
+                # === Monte Carlo Trajectories (inflated around σ₀) ===
+                mc_traj_array = mc_traj[0][0]
+                for j in range(0, mc_traj_array.shape[0], 10):
+                    r_mc = mc_traj_array[j,:,:3]
+                    r_mc_inflated = r_sigma0 + INFLATE_FACTOR * (r_mc - r_sigma0)
+                    ax.plot(r_mc_inflated[:, 0], r_mc_inflated[:, 1], r_mc_inflated[:, 2],
+                            linestyle=':', color='dimgray', lw=0.8, alpha=0.4, zorder=3)
+                    ax.scatter(r_mc_inflated[0, 0], r_mc_inflated[0, 1], r_mc_inflated[0, 2],
+                            color='0.4', s=8, marker='o', alpha=0.3, zorder=1)
+                    ax.scatter(r_mc_inflated[-1, 0], r_mc_inflated[-1, 1], r_mc_inflated[-1, 2],
+                            color='0.4', s=8, marker='X', alpha=0.3, zorder=1)
                 # === 3σ Ellipsoids remain uninflated ===
-                plot_3sigma_ellipsoid(ax, mu_sigma[0, 0, :3], P_sigma[0, 0, :3, :3])
-                plot_3sigma_ellipsoid(ax, mu_sigma[0, -1, :3], P_sigma[0, -1, :3, :3])
+                # plot_3sigma_ellipsoid(ax, mu_sigma[0, 0, :3], P_sigma[0, 0, :3, :3])
+                # plot_3sigma_ellipsoid(ax, mu_sigma[0, -1, :3], P_sigma[0, -1, :3, :3])
 
                 # === Auto-zoom ===
                 set_axes_equal(ax)

@@ -156,6 +156,17 @@ def _solve_single_bundle(args):
                 cov_diag = np.diag(P_combined_diag[t])
                 eigvals = np.diag(P_combined_cartesian_diag[t])
                 print(f"[DEBUG] SP Cov Diag @ segment {j}, time idx {t}: {eigvals}")
+                try:
+                    for sigma_idx in range(num_sigma):
+                        if t<=30:
+                            # MEE state from full_state_sigma_points (7 state vars: MEE[0:6], mass[6])
+                            mee = full_state_sigma_points[sigma_idx, t, :6]
+                            m = full_state_sigma_points[sigma_idx, t, 6]
+                            r, v = mee2rv(mee[0], mee[1], mee[2], mee[3], mee[4], mee[5], mu)
+                            print(f"[DEBUG] SP {sigma_idx:02d} @ t={t}: MEE = {mee}, mass = {m}")
+                            print(f"[DEBUG] SP {sigma_idx:02d} @ t={t}: r = {r}, v = {v}")
+                except Exception as e:
+                    print(f"[WARN] Failed to print all SP MEE/RV states @ t={t}: {e}")
                 cond_num = cond(P_combined_cartesian_diag[t])
                 #print(f"[DEBUG] Condition number at t={t}: {cond_num}")
                 for sigma_idx in range(num_sigma):
