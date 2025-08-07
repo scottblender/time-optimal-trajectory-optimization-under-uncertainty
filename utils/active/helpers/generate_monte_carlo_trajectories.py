@@ -145,14 +145,13 @@ def generate_monte_carlo_trajectories_parallel(
     global_bundle_indices, num_samples=1000, num_workers=4
 ):
     DU_km = 696340.0  # Sun radius in km
-    DU_km = 696340.0  # Sun radius in km
-    g0_s = 9.81
+    g0_s = 9.81/1000
     TU = np.sqrt(DU_km / g0_s)
     VU_kms = DU_km / TU # Convert m/s to km/s using g0
 
     # Set desired physical covariances (e.g., 0.1 km², 1e-4 (km/s)², 1 kg²)
     P_pos_km2 = np.eye(3) * 0.1        # km²
-    P_vel_kms2 = np.eye(3) * 1e-6      # (km/s)²
+    P_vel_kms2 = np.eye(3) * 1e-4      # (km/s)²
     P_mass_kg2 = np.array([[1e-2]])     # kg²
 
     # Convert to non-dimensional units for input

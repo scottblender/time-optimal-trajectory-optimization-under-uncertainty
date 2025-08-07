@@ -56,6 +56,17 @@ def _solve_single_bundle(args):
         for j in range(num_segments):
             tstart, tend = time[j], time[j + 1]
             sigma_combined = sigmas_combined[bundle_index_local, :, :, j]
+            if j == 0:
+                print(f"\n[DEBUG] Initial Sigma Points (Segment 0):")
+                for sigma_idx in range(num_sigma):
+                    r0 = sigma_combined[sigma_idx, :3]
+                    v0 = sigma_combined[sigma_idx, 3:6]
+                    m0_val = sigma_combined[sigma_idx, 6]
+                    mee = rv2mee(np.array([r0]), np.array([v0]), mu).flatten()
+
+                    mee_str = ", ".join(f"{val:.6f}" for val in mee)
+                    print(f"  σ{sigma_idx:02d}: MEE = [{mee_str}], mass = {m0_val:.2f}")
+
             idx_start = time_steps[j]
             new_lam = new_lam_bundles[idx_start, :, bundle_index_local]
             P_lam = np.eye(7) * 1e-8
@@ -69,6 +80,11 @@ def _solve_single_bundle(args):
                 r0, v0, mass = sigma_combined[sigma_idx, :3], sigma_combined[sigma_idx, 3:6], sigma_combined[sigma_idx, 6]
                 initial_state = rv2mee(np.array([r0]), np.array([v0]), mu).flatten()
                 S = np.append(np.append(initial_state, mass), new_lam)
+                if sigma_idx == 0:
+                    print(f"[DEBUG] Segment {j}: t_start = {tstart:.6f}, t_end = {tend:.6f}, Δt = {tend - tstart:.6f} TU")
+                if j == 0:
+                    s_str = ", ".join(f"{val:.16e}" for val in S)
+                    print(f"[EXPORT] Segment 0, σ{sigma_idx:02d}, substep 0: S = [{s_str}];")
                 full_states = []
                 time_values = []
                 prev_lam_mean = new_lam.copy()
@@ -101,7 +117,7 @@ def _solve_single_bundle(args):
                         else:
                             deviation = r_end.flatten() - sigma0_end_substeps[k]
                             dev_norm = np.linalg.norm(deviation)
-                            #print(f"[SUBSTEP DEV] Segment {j}, Substep {k}, σ{sigma_idx}: Δr = {deviation} DU → {dev_norm * 696_340:.2f} km")
+                            print(f"[SUBSTEP DEV] Segment {j}, Substep {k}, σ{sigma_idx}: Δr = {deviation} DU → {dev_norm * 696_340:.2f} km")
                     except Exception as e:
                         print(f"[WARN] Substep deviation failure σ{sigma_idx}, substep {k}: {e}")
 

@@ -185,13 +185,13 @@ def main():
                 os.makedirs(out_dir, exist_ok=True)
 
                 DU_km = 696340.0  # Sun radius in km
-                g0_s = 9.81
+                g0_s = 9.81/1000
                 TU = np.sqrt(DU_km / g0_s)
                 VU_kms = DU_km / TU # Convert m/s to km/s using g0
 
                 # Set desired physical covariances (e.g., 0.1 km², 1e-4 (km/s)², 1 kg²)
                 P_pos_km2 = np.eye(3) * 0.1        # km²
-                P_vel_kms2 = np.eye(3) * 1e-6     # (km/s)²
+                P_vel_kms2 = np.eye(3) * 1e-4      # (km/s)²
                 P_mass_kg2 = np.array([[1e-2]])     # kg²
 
                 # Convert to non-dimensional units for input
@@ -200,7 +200,7 @@ def main():
                 P_mass = P_mass_kg2 / (4000**2)
 
                 sigmas_combined, _, _, _, Wm, Wc = generate_sigma_points.generate_sigma_points(
-                    nsd=7, alpha=np.sqrt(9 / (7 + (3 - 7))), beta=2, kappa=(3 - 7),
+                    nsd=7, alpha=1e-3, beta=2, kappa=0,
                     P_pos=P_pos, P_vel=P_vel, P_mass=P_mass,
                     time_steps=time_steps, r_bundles=r0, v_bundles=v0, mass_bundles=m0s,
                     num_workers=os.cpu_count()
