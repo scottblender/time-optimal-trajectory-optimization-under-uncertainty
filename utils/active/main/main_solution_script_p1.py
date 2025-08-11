@@ -107,10 +107,10 @@ def add_ellipsoid_inset(ax_main, mu_sp, P_sp, mu_mc, P_mc,
 
     # Optional: overlay scatter points in grayscale
     if r_mc is not None:
-        ax_in.scatter(r_mc[:,0], r_mc[:,1], r_mc[:,2], c='0.55', s=12, alpha=0.5,
+        ax_in.scatter(r_mc[:,0], r_mc[:,1], r_mc[:,2], c='0.55', s=12, alpha=0.25,
                            label='Monte Carlo', zorder=3)
     if r_sp is not None:
-        ax_in.scatter(r_sp[:,0], r_sp[:,1], r_sp[:,2], c='0.0',  s=26, alpha=1.0,
+        ax_in.scatter(r_sp[:,0], r_sp[:,1], r_sp[:,2], c='0.0',  s=26, alpha=1,
                            label='Sigma Points', zorder=4)
 
     # Fit inset to union of 3σ AABBs (so points sit inside)
@@ -132,6 +132,7 @@ def push_3d_ticklabels_off_axis(ax, outward=0.35, pad=6):
         axis._axinfo['tick']['inward_factor'] = 0.0
         axis._axinfo['tick']['outward_factor'] = outward
     ax.tick_params(pad=pad)
+
 # =========================
 # Metrics
 # =========================
@@ -295,14 +296,14 @@ def main():
                 P_mc_t0   = np.cov(r_mc0, rowvar=False) + 1e-12*np.eye(3)
 
                 # Main scatter (grayscale)
-                ax.scatter(r_mc0[:,0], r_mc0[:,1], r_mc0[:,2], c='0.55', s=12, alpha=0.5,
+                ax.scatter(r_mc0[:,0], r_mc0[:,1], r_mc0[:,2], c='0.55', s=12, alpha=0.25,
                            label='Monte Carlo', zorder=3)
                 ax.scatter(r_sigma0[:,0], r_sigma0[:,1], r_sigma0[:,2], c='0.0',  s=26, alpha=1.0,
                            label='Sigma Points', zorder=4)
 
                 # MAIN AXIS LIMITS FROM POINTS (not ellipsoids)
                 set_axes_equal(ax)
-                set_max_ticks(fig)
+                set_max_ticks(fig,4)
 
                 # Move axis labels away from tick labels
                 ax.xaxis.labelpad = 18   # distance in points
@@ -320,12 +321,13 @@ def main():
                 # Inset (top-left, lighter alpha)
                 add_ellipsoid_inset(ax, mu_pos_t0, Ppos_t0, mu_mc_t0, P_mc_t0,
                     r_sp=r_sigma0, r_mc=r_mc0,
-                    rect=(0.62, 0.62, 0.34, 0.34))
+                    rect=(0.62, 0.72, 0.34, 0.34))
                 
                 from matplotlib.ticker import FormatStrFormatter
                 for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
                     axis.set_major_formatter(FormatStrFormatter('%.6f'))  # decimal, short, no offset
                 push_3d_ticklabels_off_axis(ax,0.5,9)
+                lock_yticks_to_spine(ax, side_x='min', side_z='min', fmt='%.6f')
                 plt.savefig(f"{out_dir}/scatter_initial_positions.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
                 plt.close()
 
@@ -346,14 +348,14 @@ def main():
                 ax.set_proj_type('ortho')   # <<< keeps ticks glued to axes
 
 
-                ax.scatter(r_mc_final[:,0], r_mc_final[:,1], r_mc_final[:,2], s=12, c='0.55', alpha=0.5,
+                ax.scatter(r_mc_final[:,0], r_mc_final[:,1], r_mc_final[:,2], s=12, c='0.55', alpha=0.25,
                            label='Monte Carlo', zorder=3)
-                ax.scatter(r_sp_final[:,0], r_sp_final[:,1], r_sp_final[:,2], s=26, c='0.0',
+                ax.scatter(r_sp_final[:,0], r_sp_final[:,1], r_sp_final[:,2], s=26, c='0.0',alpha=1,
                            label='Sigma Points', zorder=4)
 
                 # MAIN AXIS LIMITS FROM POINTS
                 set_axes_equal(ax)
-                set_max_ticks(fig)
+                set_max_ticks(fig,4)
                 # Move axis labels away from tick labels
                 ax.xaxis.labelpad = 18   # distance in points
                 ax.yaxis.labelpad = 18
@@ -369,7 +371,7 @@ def main():
 
                 add_ellipsoid_inset(ax, mu_pos_tf, Ppos_tf, mu_mc_tf, P_mc_tf,
                     r_sp=r_sp_final, r_mc=r_mc_final,
-                    rect=(0.62, 0.62, 0.34, 0.34))
+                    rect=(0.62, 0.72, 0.34, 0.34))
                 from matplotlib.ticker import FormatStrFormatter
                 for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
                     axis.set_major_formatter(FormatStrFormatter('%.6f'))  # decimal, short, no offset
