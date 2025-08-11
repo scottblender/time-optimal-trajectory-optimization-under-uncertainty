@@ -57,7 +57,7 @@ def _solve_mc_single_bundle(args):
         for j in range(num_segments):
             tstart, tend = time[j], time[j + 1]
             sigma_state = sigmas_combined[bundle_idx_local, 0, :, j]
-            lam_nominal = new_lam_bundles[j, :, bundle_idx_local]
+            lam_nominal = new_lam_bundles[time_steps[j], :, bundle_idx_local]
             sub_times = np.linspace(tstart, tend, substeps + 1)
             cartesian_samples = []
 
@@ -151,8 +151,8 @@ def generate_monte_carlo_trajectories_parallel(
 
     # Set desired physical covariances (e.g., 0.1 km², 1e-4 (km/s)², 1 kg²)
     P_pos_km2 = np.eye(3) * 0.1        # km²
-    P_vel_kms2 = np.eye(3) * 1e-4      # (km/s)²
-    P_mass_kg2 = np.array([[1e-2]])     # kg²
+    P_vel_kms2 = np.eye(3) * 1e-10      # (km/s)²
+    P_mass_kg2 = np.array([[1e-3]])     # kg²
 
     # Convert to non-dimensional units for input
     P_pos = P_pos_km2 / (DU_km**2)
@@ -163,7 +163,7 @@ def generate_monte_carlo_trajectories_parallel(
         [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
         [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
     ])
-    P_control = np.eye(7) * 1e-8
+    P_control = np.eye(7) * 1e-13
 
     substeps = 10
     evals_per_substep = 20

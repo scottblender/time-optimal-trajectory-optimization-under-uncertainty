@@ -67,9 +67,8 @@ def _solve_single_bundle(args):
                     mee_str = ", ".join(f"{val:.6f}" for val in mee)
                     print(f"  σ{sigma_idx:02d}: MEE = [{mee_str}], mass = {m0_val:.2f}")
 
-            idx_start = time_steps[j]
-            new_lam = new_lam_bundles[idx_start, :, bundle_index_local]
-            P_lam = np.eye(7) * 1e-8
+            new_lam = new_lam_bundles[time_steps[j], :, bundle_index_local]
+            P_lam = np.eye(7) * 1e-13
             sub_times = np.linspace(tstart, tend, substeps + 1)
 
             full_state_sigma_points = []
