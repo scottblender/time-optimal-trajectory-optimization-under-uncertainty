@@ -23,15 +23,27 @@ def main():
     num_bundles = r_bundles.shape[2]
     nsd = 7
     beta, kappa = 2, 3 - nsd
-    alpha = np.sqrt(9 / (nsd + kappa))
+    alpha = 3/np.sqrt(3)
     batch_size = 5
     full_time_steps = np.arange(len(backTspan))
     num_time_steps_full = len(full_time_steps)
 
+    DU_km = 696340.0  # Sun radius in km
+    g0_s = 9.81/1000
+    TU = np.sqrt(DU_km / g0_s)
+    VU_kms = DU_km / TU
+
+    # Physical covariances (km / km/s / kg), then → non-dimensional
+    P_pos_km2  = np.eye(3) * 0.01
+    P_vel_kms2 = np.eye(3) * 1e-10
+    P_mass_kg2 = np.array([[1e-3]])
+    P_pos  = P_pos_km2  / (DU_km**2)
+    P_vel  = P_vel_kms2 / (VU_kms**2)
+    P_mass = P_mass_kg2 / (4000**2)
     baseline_config = {
-        "P_pos": np.eye(3) * 0.01,
-        "P_vel": np.eye(3) * 0.0001,
-        "P_mass": np.array([[0.0001]])
+        "P_pos": P_pos,
+        "P_vel": P_vel,
+        "P_mass": P_mass
     }
 
     for batch_start in range(0, num_bundles, batch_size):

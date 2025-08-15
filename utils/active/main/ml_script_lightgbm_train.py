@@ -15,7 +15,9 @@ from mee2rv import mee2rv
 
 # === Constants ===
 mu = 27.8996
-P_pos = np.eye(3) * 0.01
+DU_km = 696340.0  # Sun radius in km
+P_pos_km2  = np.eye(3) * 0.01
+P_pos = P_pos_km2 / DU_km **2
 
 # === Load segment times from width file ===
 with open("stride_4000min/bundle_segment_widths.txt") as f:

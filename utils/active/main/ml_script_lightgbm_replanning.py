@@ -88,14 +88,25 @@ def main():
     tf = t_vals[-1]
     os.makedirs("uncertainty_aware_outputs", exist_ok=True)
 
-    t_fracs = [0.925, 0.95]
-    diag_mins = np.array([9.098224e+01, 7.082445e-04, 6.788599e-04, 1.376023e-08, 2.346605e-08, 5.885859e-08, 1.000000e-04])
-    diag_maxs = np.array([1.977489e+03, 6.013501e-03, 5.173225e-03, 4.284912e-04, 1.023625e-03, 6.818500e+00, 1.000000e-04])
+    t_fracs = [0.985]
+    diag_mins = np.array([1.319000e-08, 1.038710e-13, 6.880754e-14, 2.220821e-16, 2.220804e-16, 2.221686e-16, 6.250022e-11])
+    diag_maxs = np.array([1.211294e-06, 5.092024e-12, 1.916482e-12, 7.411871e-14, 2.897651e-13, 1.786088e-15, 6.250022e-11])
     P_models = {'min': np.diag(diag_mins), 'max': np.diag(diag_maxs)}
+    DU_km = 696340.0  # Sun radius in km
+    g0_s = 9.81/1000
+    TU = np.sqrt(DU_km / g0_s)
+    VU_kms = DU_km / TU
+    # Physical covariances (km / km/s / kg), then → non-dimensional
+    P_pos_km2  = np.eye(3) * 0.01
+    P_vel_kms2 = np.eye(3) * 1e-10
+    P_mass_kg2 = np.array([[1e-3]])
+    P_pos  = P_pos_km2  / (DU_km**2)
+    P_vel  = P_vel_kms2 / (VU_kms**2)
+    P_mass = P_mass_kg2 / (4000**2)
     P_cart = np.block([
-        [np.eye(3)*0.01,       np.zeros((3,3)), np.zeros((3,1))],
-        [np.zeros((3,3)), np.eye(3)*0.0001,     np.zeros((3,1))],
-        [np.zeros((1,3)), np.zeros((1,3)),      np.array([[0.0001]])]
+        [P_pos,       np.zeros((3,3)), np.zeros((3,1))],
+        [np.zeros((3,3)), P_vel,     np.zeros((3,1))],
+        [np.zeros((1,3)), np.zeros((1,3)),      P_mass]
     ])
     F_val = 0.9 * F_nom
     summary = []
@@ -114,9 +125,9 @@ def main():
             fig = plt.figure(figsize=(6.5, 5.5))
             ax = fig.add_subplot(111, projection='3d')
 
-            ax.plot(r_nom[:, 0], r_nom[:, 1], r_nom[:, 2], color='black', lw=2.0, label="Nominal")
-            ax.scatter(*r0, color='black', s=20, label="Start", zorder=5)
-            ax.scatter(*r_nom[-1], color='black', s=20, marker='X', label="End", zorder=5)
+            ax.plot(r_nom[-7:, 0], r_nom[-7:, 1], r_nom[-7:, 2], color='black', lw=2.0, label="Nominal")
+            #ax.scatter(*r0, color='black', s=20, label="Start", zorder=5)
+            ax.scatter(*r_nom[-1], color='black', s=20, marker='X', label="End")
 
             for i, s in enumerate(shared_samples):
                 try:
@@ -127,24 +138,25 @@ def main():
                         'dummy1', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'
                     ])
                     lam = model.predict(x_df)[0]
-                    u_hat = compute_thrust_direction(mu, F_val, mee, lam)
-                    if not np.isnan(u_hat).any():
-                        ax.quiver(*s[:3], *u_hat, length=100, normalize=True,
-                                color='0.5', linewidth=0.6, alpha=0.5)
+                    # u_hat = compute_thrust_direction(mu, F_val, mee, lam)
+                    # if not np.isnan(u_hat).any():
+                    #     ax.quiver(*s[:3], *u_hat, length=100, normalize=True,
+                    #             color='0.5', linewidth=0.6, alpha=0.5)
                     S = np.hstack([mee, lam])
                     sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0),
                                     [t_k, tf], S, t_eval=np.linspace(t_k, tf, 100))
                     r, _ = mee2rv(*sol.y[:6], mu)
                     if i % 10 == 0:
-                        ax.plot(r[:, 0], r[:, 1], r[:, 2], linestyle=':', color='0.6', lw=0.8, alpha=0.3)
-                        ax.scatter(*r[0], color='0.6', s=5, alpha=0.25)
-                        ax.scatter(*r[-1], color='0.6', s=5, marker='X', alpha=0.25)
+                        ax.plot(r[-60:, 0], r[-60:, 1], r[-60:, 2], linestyle=':', color='red', lw=1.5, alpha=0.6)
+                        #ax.scatter(*r[0], color='0.6', s=5, alpha=0.25)
+                        ax.scatter(*r[-1], color='red', s=5, lw=1.5, marker='X', alpha=0.5)
                     mc_endpoints.append(r[-1])
                 except:
                     continue
 
             mc_endpoints = np.array(mc_endpoints)
             mu_mc = np.mean(mc_endpoints, axis=0)
+            print(f"MC - nominal:{mu_mc - r_nom[-1]}")
             cov_mc = np.einsum("ni,nj->ij", mc_endpoints - mu_mc, mc_endpoints - mu_mc) / mc_endpoints.shape[0]
             eigvals = np.maximum(np.linalg.eigvalsh(cov_mc), 0)
             print(eigvals)
@@ -152,7 +164,7 @@ def main():
             plot_3sigma_ellipsoid(ax, mu_mc, cov_mc, color='gray', alpha=0.25)
 
             # === Inset: zoom near final MC region
-            inset_ax = fig.add_axes([0.63, 0.63, 0.34, 0.34], projection='3d')
+            inset_ax = fig.add_axes([0.63, 0.73, 0.34, 0.34], projection='3d')
             for i, s in enumerate(shared_samples[::10]):
                 try:
                     mee = np.hstack([rv2mee(s[:3].reshape(1, 3), s[3:6].reshape(1, 3), mu).flatten(), s[6]])
@@ -190,12 +202,12 @@ def main():
             from matplotlib.patches import Patch
             ax.legend(handles=[
                 Line2D([0], [0], color='black', lw=2.0, label='Nominal'),
-                Line2D([0], [0], linestyle=':', color='0.6', lw=1.0, label='Monte Carlo'),
-                Line2D([0], [0], marker='o', color='black', linestyle='', label='Start', markersize=5),
+                Line2D([0], [0], linestyle=':', color='red', lw=1.0, label='Monte Carlo'),
+                #Line2D([0], [0], marker='o', color='black', linestyle='', label='Start', markersize=5),
                 Line2D([0], [0], marker='X', color='black', linestyle='', label='End', markersize=6),
-                Line2D([0], [0], color='0.5', lw=1.5, label='Control (Start)'),
+                #Line2D([0], [0], color='0.5', lw=1.5, label='Control (Start)'),
                 Patch(color='gray', alpha=0.25, label='3σ Ellipsoid (MC)')
-            ], loc='upper left', bbox_to_anchor=(0.03, 0.95), frameon=True)
+            ], loc='upper left', bbox_to_anchor=(0.03, 1), frameon=True)
 
             plt.tight_layout()
             fname = f"tk{int(t_frac*100)}_unc_{level}.pdf"

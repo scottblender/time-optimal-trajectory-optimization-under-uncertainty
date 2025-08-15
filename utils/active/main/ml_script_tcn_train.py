@@ -15,7 +15,7 @@ hidden_size = 128
 num_layers = 4
 learning_rate = 0.002
 epochs = 50
-patience = 4
+patience = 2
 
 # === Model ===
 class TCN_MANN(nn.Module):

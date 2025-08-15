@@ -24,9 +24,9 @@ def _generate_sigma_points_for_bundle(i, nsd, time_steps, P_combined, r_bundles,
             diffs = sp_j - mean_sp
             cov_sp = np.einsum("i,ij,ik->jk", weights.Wc, diffs, diffs)
 
-            print(f"\n[SP CHECK] Bundle {i}, t_idx={j}")
-            print("→ Mean diff norm:", np.linalg.norm(mean_sp - nominal))
-            print("→ Cov diff max rel error:", np.max(np.abs(P_combined - cov_sp) / np.maximum(P_combined, 1e-15)))
+            # print(f"\n[SP CHECK] Bundle {i}, t_idx={j}")
+            # print("→ Mean diff norm:", np.linalg.norm(mean_sp - nominal))
+            # print("→ Cov diff max rel error:", np.max(np.abs(P_combined - cov_sp) / np.maximum(P_combined, 1e-15)))
 
     return sigmas
 

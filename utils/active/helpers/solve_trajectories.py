@@ -56,16 +56,16 @@ def _solve_single_bundle(args):
         for j in range(num_segments):
             tstart, tend = time[j], time[j + 1]
             sigma_combined = sigmas_combined[bundle_index_local, :, :, j]
-            if j == 0:
-                print(f"\n[DEBUG] Initial Sigma Points (Segment 0):")
-                for sigma_idx in range(num_sigma):
-                    r0 = sigma_combined[sigma_idx, :3]
-                    v0 = sigma_combined[sigma_idx, 3:6]
-                    m0_val = sigma_combined[sigma_idx, 6]
-                    mee = rv2mee(np.array([r0]), np.array([v0]), mu).flatten()
+            # if j == 0:
+            #     print(f"\n[DEBUG] Initial Sigma Points (Segment 0):")
+            #     for sigma_idx in range(num_sigma):
+            #         r0 = sigma_combined[sigma_idx, :3]
+            #         v0 = sigma_combined[sigma_idx, 3:6]
+            #         m0_val = sigma_combined[sigma_idx, 6]
+            #         mee = rv2mee(np.array([r0]), np.array([v0]), mu).flatten()
 
-                    mee_str = ", ".join(f"{val:.6f}" for val in mee)
-                    print(f"  σ{sigma_idx:02d}: MEE = [{mee_str}], mass = {m0_val:.2f}")
+            #         mee_str = ", ".join(f"{val:.6f}" for val in mee)
+            #         print(f"  σ{sigma_idx:02d}: MEE = [{mee_str}], mass = {m0_val:.2f}")
 
             new_lam = new_lam_bundles[time_steps[j], :, bundle_index_local]
             P_lam = np.eye(7) * 1e-13
@@ -79,11 +79,11 @@ def _solve_single_bundle(args):
                 r0, v0, mass = sigma_combined[sigma_idx, :3], sigma_combined[sigma_idx, 3:6], sigma_combined[sigma_idx, 6]
                 initial_state = rv2mee(np.array([r0]), np.array([v0]), mu).flatten()
                 S = np.append(np.append(initial_state, mass), new_lam)
-                if sigma_idx == 0:
-                    print(f"[DEBUG] Segment {j}: t_start = {tstart:.6f}, t_end = {tend:.6f}, Δt = {tend - tstart:.6f} TU")
-                if j == 0:
-                    s_str = ", ".join(f"{val:.16e}" for val in S)
-                    print(f"[EXPORT] Segment 0, σ{sigma_idx:02d}, substep 0: S = [{s_str}];")
+                # if sigma_idx == 0:
+                #     print(f"[DEBUG] Segment {j}: t_start = {tstart:.6f}, t_end = {tend:.6f}, Δt = {tend - tstart:.6f} TU")
+                # if j == 0:
+                #     s_str = ", ".join(f"{val:.16e}" for val in S)
+                #     print(f"[EXPORT] Segment 0, σ{sigma_idx:02d}, substep 0: S = [{s_str}];")
                 full_states = []
                 time_values = []
                 prev_lam_mean = new_lam.copy()
@@ -116,7 +116,7 @@ def _solve_single_bundle(args):
                         else:
                             deviation = r_end.flatten() - sigma0_end_substeps[k]
                             dev_norm = np.linalg.norm(deviation)
-                            print(f"[SUBSTEP DEV] Segment {j}, Substep {k}, σ{sigma_idx}: Δr = {deviation} DU → {dev_norm * 696_340:.2f} km")
+                            # print(f"[SUBSTEP DEV] Segment {j}, Substep {k}, σ{sigma_idx}: Δr = {deviation} DU → {dev_norm * 696_340:.2f} km")
                     except Exception as e:
                         print(f"[WARN] Substep deviation failure σ{sigma_idx}, substep {k}: {e}")
 
@@ -170,7 +170,7 @@ def _solve_single_bundle(args):
             for t in range(len(P_combined_diag)):
                 cov_diag = np.diag(P_combined_diag[t])
                 eigvals = np.diag(P_combined_cartesian_diag[t])
-                print(f"[DEBUG] SP Cov Diag @ segment {j}, time idx {t}: {eigvals}")
+                # print(f"[DEBUG] SP Cov Diag @ segment {j}, time idx {t}: {eigvals}")
                 try:
                     for sigma_idx in range(num_sigma):
                         if t<=30:
@@ -178,8 +178,8 @@ def _solve_single_bundle(args):
                             mee = full_state_sigma_points[sigma_idx, t, :6]
                             m = full_state_sigma_points[sigma_idx, t, 6]
                             r, v = mee2rv(mee[0], mee[1], mee[2], mee[3], mee[4], mee[5], mu)
-                            print(f"[DEBUG] SP {sigma_idx:02d} @ t={t}: MEE = {mee}, mass = {m}")
-                            print(f"[DEBUG] SP {sigma_idx:02d} @ t={t}: r = {r}, v = {v}")
+                            # print(f"[DEBUG] SP {sigma_idx:02d} @ t={t}: MEE = {mee}, mass = {m}")
+                            # print(f"[DEBUG] SP {sigma_idx:02d} @ t={t}: r = {r}, v = {v}")
                 except Exception as e:
                     print(f"[WARN] Failed to print all SP MEE/RV states @ t={t}: {e}")
                 cond_num = cond(P_combined_cartesian_diag[t])
@@ -224,12 +224,12 @@ def _solve_single_bundle(args):
             deviations = sigmas_final - sigma0_final
             norms = np.linalg.norm(deviations, axis=1)
 
-            print("\n[DEV] FINAL full-trajectory deviation from sigma 0 (DU):")
-            for i, dev in enumerate(deviations):
-                print(f"  σ{i}: Δr = {dev} DU → {np.linalg.norm(dev)*696340:.2f} km")
+            # print("\n[DEV] FINAL full-trajectory deviation from sigma 0 (DU):")
+            # for i, dev in enumerate(deviations):
+            #     print(f"  σ{i}: Δr = {dev} DU → {np.linalg.norm(dev)*696340:.2f} km")
 
-            print(f"→ Max: {np.max(norms):.6e}, Mean: {np.mean(norms):.6e}, Std: {np.std(norms):.6e}")
-            print(f"→ Max in km: {np.max(norms) * 696_340:.2f} km")
+            # print(f"→ Max: {np.max(norms):.6e}, Mean: {np.mean(norms):.6e}, Std: {np.std(norms):.6e}")
+            # print(f"→ Max in km: {np.max(norms) * 696_340:.2f} km")
         except Exception as e:
             print(f"[WARN] Failed to compute full-trajectory deviation: {e}")
         return bundle_trajectories, bundle_P_combined_history, bundle_means_history, X_rows, y_rows

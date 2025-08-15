@@ -151,8 +151,8 @@ def main():
             1.0 * mean_kl +
             8.0 * max_cov +
             1.0 * cov_mismatch +
-            1.5 * max_mahal +
-            0.5 * mean_mahal +
+            #1.5 * max_mahal +
+            #0.5 * mean_mahal +
             1e-9 * data_size
         )
 
@@ -162,8 +162,8 @@ def main():
             "max_KL": max_kl,
             "max_cov": max_cov,
             "cov_mismatch": cov_mismatch,
-            "max_mahalanobis": max_mahal,
-            "mean_mahalanobis": mean_mahal,
+            #"max_mahalanobis": max_mahal,
+            #"mean_mahalanobis": mean_mahal,
             "estimated_data_size": data_size,
             "score": score
         })

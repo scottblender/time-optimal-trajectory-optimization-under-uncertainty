@@ -9,7 +9,7 @@ from numpy.linalg import inv
 from tqdm import tqdm
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
-from matplotlib.ticker import MaxNLocator, FormatStrFormatter
+from matplotlib.ticker import ScalarFormatter, FixedLocator
 import joblib
 
 plt.rcParams.update({'font.size': 10})
@@ -37,7 +37,7 @@ def ellipsoid_aabb(mean, cov, scale=3.0, pad=0.05):
     return lo - pad*span, hi + pad*span
 
 def plot_3sigma_ellipsoid_lines(ax, mean, cov, color='0.5', scale=3.0,
-                                n_meridians=24, n_parallels=16, lw=0.9, alpha=0.9):
+                                n_meridians=24, n_parallels=16, lw=0.9, alpha=0.9, zorder=5):
     """Artifact-free 3σ ellipsoid rendered as a line frame (no translucent surface)."""
     cov = 0.5*(cov + cov.T) + 1e-12*np.eye(3)
     w, V = np.linalg.eigh(cov)
@@ -55,7 +55,7 @@ def plot_3sigma_ellipsoid_lines(ax, mean, cov, color='0.5', scale=3.0,
         y = r[1]*np.cos(v)*su
         z = r[2]*np.sin(v)
         E = (np.column_stack((x, y, z)) @ V.T) + mean
-        ax.plot(E[:,0], E[:,1], E[:,2], color=color, lw=lw, alpha=alpha, zorder=2)
+        ax.plot(E[:,0], E[:,1], E[:,2], color=color, lw=lw, alpha=alpha, zorder=zorder)
 
     # Parallels
     for vi in v[1:-1]:
@@ -64,7 +64,7 @@ def plot_3sigma_ellipsoid_lines(ax, mean, cov, color='0.5', scale=3.0,
         y = r[1]*cv*np.sin(u)
         z = np.full_like(u, r[2]*sv)
         E = (np.column_stack((x, y, z)) @ V.T) + mean
-        ax.plot(E[:,0], E[:,1], E[:,2], color=color, lw=lw, alpha=alpha, zorder=2)
+        ax.plot(E[:,0], E[:,1], E[:,2], color=color, lw=lw, alpha=alpha, zorder=zorder)
 
 def set_axes_equal(ax):
     x_limits, y_limits, z_limits = ax.get_xlim3d(), ax.get_ylim3d(), ax.get_zlim3d()
@@ -89,7 +89,7 @@ def set_max_ticks(fig, n=5):
         ax.xaxis.set_major_locator(MaxNLocator(nbins=n))
         ax.yaxis.set_major_locator(MaxNLocator(nbins=n))
         if hasattr(ax, 'zaxis'):
-            ax.zaxis.set_major_locator(MaxNLocator(nbins=5))
+            ax.zaxis.set_major_locator(MaxNLocator(nbins=n))
 
 def add_ellipsoid_inset(ax_main, mu_sp, P_sp, mu_mc, P_mc,
                         r_sp=None, r_mc=None,           # NEW
@@ -102,8 +102,8 @@ def add_ellipsoid_inset(ax_main, mu_sp, P_sp, mu_mc, P_mc,
     ax_in = fig.add_axes(rect, projection='3d', facecolor='white')
 
     # Ellipsoids (light, line-frame)
-    plot_3sigma_ellipsoid_lines(ax_in, mu_sp, P_sp, color='0.35', scale=3.0, lw=0.8, alpha=0.40)
-    plot_3sigma_ellipsoid_lines(ax_in, mu_mc, P_mc, color='0.70', scale=3.0, lw=0.8, alpha=0.35)
+    plot_3sigma_ellipsoid_lines(ax_in, mu_sp, P_sp, color='0.35', scale=3.0, lw=0.8, alpha=0.40,zorder=6)
+    plot_3sigma_ellipsoid_lines(ax_in, mu_mc, P_mc, color='0.70', scale=3.0, lw=0.8, alpha=0.35,zorder=5)
 
     # Optional: overlay scatter points in grayscale
     if r_mc is not None:
@@ -126,12 +126,74 @@ def add_ellipsoid_inset(ax_main, mu_sp, P_sp, mu_mc, P_mc,
     ax_in.set_title("3σ Ellipsoids", fontsize=9, pad=2, color='0.25')
     return ax_in
 
-def push_3d_ticklabels_off_axis(ax, outward=0.35, pad=6):
-    """Nudge 3D tick labels away from the axis line (fixes 'labels on spine')."""
-    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
-        axis._axinfo['tick']['inward_factor'] = 0.0
-        axis._axinfo['tick']['outward_factor'] = outward
-    ax.tick_params(pad=pad)
+def expand_xyz_labels_no_offset(ax, fmt=".6f"):
+    """
+    Freeze current tick LOCATIONS and relabel with raw absolute values
+    (no offset, no 10**k scaling). Also nudges label rotation/alignment.
+    """
+
+    # Make sure ticks exist (formatter/locator have run)
+    ax.figure.canvas.draw()
+
+    def _relabel(ax, axis):
+        from mpl_toolkits.mplot3d.axis3d import XAxis, YAxis, ZAxis
+        # 1) turn OFF offset/scaling for LABELING (do NOT change locator)
+        f = axis.get_major_formatter()
+        if hasattr(f, "set_useOffset"):
+            f.set_useOffset(False)
+        if isinstance(f, ScalarFormatter):
+            # prevent scientific scaling on labels
+            f.set_powerlimits((0, 0))
+
+        # 2) freeze current positions so nothing moves when we relabel
+        ticks = axis.get_ticklocs()
+        axis.set_major_locator(FixedLocator(ticks))
+
+        # 3) build raw absolute labels (no offset, no scaling)
+        labels = [format(t, fmt) for t in ticks]
+
+        # ensure we have text artists, then update text + style
+        axis.set_ticklabels(labels)
+        if isinstance(axis, YAxis):
+            ax.set_yticklabels(labels, rotation=-12,
+                                verticalalignment='baseline',
+                                horizontalalignment='left')
+        # 4) hide the little "+…"/"×10^k" artist just in case
+        axis.offsetText.set_visible(False)
+
+    # Apply per axis (these alignments work well in 3D)
+    _relabel(ax, ax.xaxis)
+    _relabel(ax, ax.yaxis)
+    _relabel(ax, ax.zaxis)
+
+    # redraw to commit text changes
+    ax.figure.canvas.draw()
+
+def set_max_ticks_exact(ax, n=4, tick_inset=0.1):
+    """
+    Force exactly n ticks on each axis, inset from the endpoints
+    by 'tick_inset' fraction of the axis span.
+    """
+    # X
+    lo, hi = ax.get_xlim3d()
+    span = hi - lo
+    lo_i = lo + tick_inset * span
+    hi_i = hi - tick_inset * span
+    ax.xaxis.set_major_locator(FixedLocator(np.linspace(lo_i, hi_i, n)))
+
+    # Y
+    lo, hi = ax.get_ylim3d()
+    span = hi - lo
+    lo_i = lo + tick_inset * span
+    hi_i = hi - tick_inset * span
+    ax.yaxis.set_major_locator(FixedLocator(np.linspace(lo_i, hi_i, n)))
+
+    # Z
+    lo, hi = ax.get_zlim3d()
+    span = hi - lo
+    lo_i = lo + tick_inset * span
+    hi_i = hi - tick_inset * span
+    ax.zaxis.set_major_locator(FixedLocator(np.linspace(lo_i, hi_i, n)))
 
 # =========================
 # Metrics
@@ -162,6 +224,19 @@ def compute_kl_divergence(mu1, sigma1, mu2, sigma2, epsilon=1e-10):
     print(f"  SP eig min/max: {ev_sp.min():.2e} / {ev_sp.max():.2e}")
     print(f"  MC eig min/max: {ev_mc.min():.2e} / {ev_mc.max():.2e}")
     return float(max(kl_div, 0.0))
+
+def ellipsoid_3sigma_volume(P_pos, DU_km=696340.0):
+    """
+    3σ ellipsoid volume from a 3x3 position covariance (in DU^2).
+    Returns (vol_DU3, vol_km3).
+    """
+    # be safe: symmetrize + clamp tiny negatives
+    P = 0.5*(P_pos + P_pos.T)
+    w = np.clip(np.linalg.eigvalsh(P), 0.0, None)   # DU^2
+    radii_DU = 3.0 * np.sqrt(w)                     # 3σ semi-axes in DU
+    vol_DU3 = (4.0/3.0) * np.pi * np.prod(radii_DU) # DU^3
+    vol_km3 = vol_DU3 * (DU_km**3)                  # km^3 (1 DU = Sun radius)
+    return vol_DU3, vol_km3
 
 # =========================
 # Main
@@ -227,12 +302,12 @@ def main():
         print(f"[INFO] Max width at t = {widths_array[max_t_idx, 0]:.2f} TU → {widths_array[max_t_idx, 1]:.6f} km")
         print(f"[INFO] Min width at t = {widths_array[min_t_idx, 0]:.2f} TU → {widths_array[min_t_idx, 1]:.6f} km")
 
-        for label, idx in [("min", min_t_idx),("max", max_t_idx)]:
+        for label, idx in [("max", max_t_idx),("min", min_t_idx)]:
             dists = np.linalg.norm(r_b[idx] - r_tr[idx][:, np.newaxis], axis=0)
             bundle_farthest = int(np.argmax(dists))
             bundle_closest = int(np.argmin(dists))
 
-            for mode, bundle_idx in [("farthest", bundle_farthest), ("closest", bundle_closest)]:
+            for mode, bundle_idx in [("closest", bundle_closest),("farthest", bundle_farthest)]:
                 print(f"[INFO] {label.upper()} segment — {mode} bundle idx = {bundle_idx}")
                 r0 = r_b[:, :, bundle_idx][:, :, np.newaxis]
                 v0 = v_b[:, :, bundle_idx][:, :, np.newaxis]
@@ -292,8 +367,8 @@ def main():
                 mu_pos_t0 = mu_sigma_list[0][0, 0, :3]
                 Ppos_t0   = P_sigma_list[0][0, 0, :3, :3]
                 # MC empirical mean/cov at t0
-                mu_mc_t0  = np.mean(r_mc0, axis=0)
-                P_mc_t0   = np.cov(r_mc0, rowvar=False) + 1e-12*np.eye(3)
+                mu_mc_t0  = mu_mc[0,0,0,:3]
+                P_mc_t0   = P_mc[0,0,0,:3,:3]
 
                 # Main scatter (grayscale)
                 ax.scatter(r_mc0[:,0], r_mc0[:,1], r_mc0[:,2], c='0.55', s=12, alpha=0.25,
@@ -303,12 +378,13 @@ def main():
 
                 # MAIN AXIS LIMITS FROM POINTS (not ellipsoids)
                 set_axes_equal(ax)
-                set_max_ticks(fig,4)
-
+                set_max_ticks_exact(ax,4)
+                expand_xyz_labels_no_offset(ax, fmt=".7f")
+                
                 # Move axis labels away from tick labels
-                ax.xaxis.labelpad = 18   # distance in points
-                ax.yaxis.labelpad = 18
-                ax.zaxis.labelpad = 18
+                ax.xaxis.labelpad = 26   # distance in points
+                ax.yaxis.labelpad = 33
+                ax.zaxis.labelpad = 26
                 ax.set_xlabel("X [DU]"); ax.set_ylabel("Y [DU]"); ax.set_zlabel("Z [DU]")
                 legend_items = [
                     Line2D([0],[0], marker='o', color='none', markerfacecolor='0.55', markersize=6, label='Monte Carlo'),
@@ -322,14 +398,12 @@ def main():
                 add_ellipsoid_inset(ax, mu_pos_t0, Ppos_t0, mu_mc_t0, P_mc_t0,
                     r_sp=r_sigma0, r_mc=r_mc0,
                     rect=(0.62, 0.72, 0.34, 0.34))
-                
-                from matplotlib.ticker import FormatStrFormatter
-                for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
-                    axis.set_major_formatter(FormatStrFormatter('%.6f'))  # decimal, short, no offset
-                push_3d_ticklabels_off_axis(ax,0.5,9)
-                lock_yticks_to_spine(ax, side_x='min', side_z='min', fmt='%.6f')
+                ax.tick_params(pad=13)
                 plt.savefig(f"{out_dir}/scatter_initial_positions.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
                 plt.close()
+
+                sp0_DU3, sp0_km3 = ellipsoid_3sigma_volume(Ppos_t0, DU_km)
+                mc0_DU3, mc0_km3 = ellipsoid_3sigma_volume(P_mc_t0, DU_km)
 
                 # ---------- Scatter: Final (tf) with 3σ inset ----------
                 final_index = traj.shape[3] - 1
@@ -340,8 +414,8 @@ def main():
                 mu_pos_tf = mu_sigma_list[0][0, -1, :3]
                 Ppos_tf   = P_sigma_list[0][0, -1, :3, :3]
                 # MC empirical mean/cov at tf
-                mu_mc_tf = np.mean(r_mc_final, axis=0)
-                P_mc_tf  = np.cov(r_mc_final, rowvar=False) + 1e-12*np.eye(3)
+                mu_mc_tf = mu_mc[0,0,-1,:3]
+                P_mc_tf  = P_mc[0,0,-1,:3,:3]
 
                 fig = plt.figure(figsize=(6.5, 5.5))
                 ax  = fig.add_subplot(111, projection='3d')
@@ -355,11 +429,13 @@ def main():
 
                 # MAIN AXIS LIMITS FROM POINTS
                 set_axes_equal(ax)
-                set_max_ticks(fig,4)
+                set_max_ticks_exact(ax,4)
+                expand_xyz_labels_no_offset(ax, fmt=".6f")
+
                 # Move axis labels away from tick labels
-                ax.xaxis.labelpad = 18   # distance in points
-                ax.yaxis.labelpad = 18
-                ax.zaxis.labelpad = 18
+                ax.xaxis.labelpad = 26   # distance in points
+                ax.yaxis.labelpad = 33
+                ax.zaxis.labelpad = 26
                 ax.set_xlabel("X [DU]"); ax.set_ylabel("Y [DU]"); ax.set_zlabel("Z [DU]")
                 legend_items = [
                     Line2D([0],[0], marker='o', color='none', markerfacecolor='0.55', markersize=6, label='Monte Carlo'),
@@ -372,12 +448,12 @@ def main():
                 add_ellipsoid_inset(ax, mu_pos_tf, Ppos_tf, mu_mc_tf, P_mc_tf,
                     r_sp=r_sp_final, r_mc=r_mc_final,
                     rect=(0.62, 0.72, 0.34, 0.34))
-                from matplotlib.ticker import FormatStrFormatter
-                for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
-                    axis.set_major_formatter(FormatStrFormatter('%.6f'))  # decimal, short, no offset
-                push_3d_ticklabels_off_axis(ax,0.5,9)
+                ax.tick_params(pad=13)
                 plt.savefig(f"{out_dir}/scatter_final_positions.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
                 plt.close()
+
+                spF_DU3, spF_km3 = ellipsoid_3sigma_volume(Ppos_tf, DU_km)
+                mcF_DU3, mcF_km3 = ellipsoid_3sigma_volume(P_mc_tf, DU_km)
 
                 # ---------- Diagnostics ----------
                 P_sigma = P_sigma_list[0]
@@ -399,9 +475,9 @@ def main():
                     d2 = diff.T @ cov_inv @ diff
                     print(f"[MAHAL@t={t:02d}] Mahalanobis² = {d2:.3f} — |μ_SP − μ_MC| = {np.linalg.norm(diff):.3e}")
 
-                np.savetxt(f"{out_dir}/kl_divergence.txt", kl_vals, fmt="%.6f")
-                np.savetxt(f"{out_dir}/cov_sigma_final.txt", P_sigma[0, -1], fmt="%.6f")
-                np.savetxt(f"{out_dir}/cov_mc_final.txt", P_mc[0, 0, -1], fmt="%.6f")
+                np.savetxt(f"{out_dir}/kl_divergence.txt", kl_vals, fmt="%.18f")
+                np.savetxt(f"{out_dir}/cov_sigma_final.txt", P_sigma[0, -1], fmt="%.18f")
+                np.savetxt(f"{out_dir}/cov_mc_final.txt", P_mc[0, 0, -1], fmt="%.18f")
 
                 print(f"MC: {np.diag(P_mc[0,0,-1])}")
                 print(f"SP: {np.diag(P_sigma[0,-1])}")
@@ -440,8 +516,15 @@ def main():
                 sigma0_final = np.hstack((r, v, [mee_final[6]]))
                 P_final = P_sigma[0, -1][:7, :7]
                 trajs = [np.concatenate([seg[i] for seg in traj[0]], axis=0) for i in range(len(traj[0][0]))]
-                mahal = [np.sqrt((x[-1, :7] - sigma0_final) @ inv(P_final + 1e-10*np.eye(7)) @ (x[-1, :7] - sigma0_final)) for x in trajs[1:]]
-                np.savetxt(f"{out_dir}/mahalanobis_distances.txt", mahal, fmt="%.6f")
+                mahal = [np.sqrt((x[-1, :7] - sigma0_final) @ inv(P_final+ 1e-6*np.eye(7)) @ (x[-1, :7] - sigma0_final)) for x in trajs[1:]]
+                np.savetxt(f"{out_dir}/mahalanobis_distances.txt", mahal, fmt="%.12f")
+                with open(f"{out_dir}/ellipsoid_volumes.txt", "w") as f:
+                    f.write("ellipsoid volume (position only)\n")
+                    f.write(f"Initial SP: {sp0_DU3:.6f} DU^3  ({sp0_km3:.6f} km^3)\n")
+                    f.write(f"Initial MC: {mc0_DU3:.6f} DU^3  ({mc0_km3:.6f} km^3)\n")
+                    f.write(f"Final   SP: {spF_DU3:.6f} DU^3  ({spF_km3:.6f} km^3)\n")
+                    f.write(f"Final   MC: {mcF_DU3:.6f} DU^3  ({mcF_km3:.6f} km^3)\n")
+
 
         runtime = time.time() - start_time
         with open(f"{out_root}/runtime.txt", "w") as f:
