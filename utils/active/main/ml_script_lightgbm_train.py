@@ -31,15 +31,17 @@ with open("stride_4000min/bundle_segment_widths.txt") as f:
         sorted_indices = np.argsort(times_arr[:, 1])
         min_idx = sorted_indices[1]
 
-    t_max_neighbors = time_vals[max(0, max_idx - 1): max_idx + 2]
-    t_min_neighbors = time_vals[max(0, min_idx - 1): min_idx + 2]
+    t_max_neighbors_eval = time_vals[max(0, max_idx - 1): max_idx + 2]
+    t_min_neighbors_eval = time_vals[max(0, min_idx - 1): min_idx + 2]
+    t_train_neighbors = time_vals[max(0, max_idx - 3): max_idx + 4]
 
-    print(f"[INFO] Max segment times: {t_max_neighbors}")
-    print(f"[INFO] Min segment times: {t_min_neighbors}")
+    print(f"[INFO] Max segment times (for eval): {t_max_neighbors_eval}")
+    print(f"[INFO] Min segment times (for eval): {t_min_neighbors_eval}")
+    print(f"[INFO] Training times (t_max +/- 3): {t_train_neighbors}")
 
 # === Init containers ===
-X_all, y_all = [], []
-X_max, y_max, X_min, y_min = [], [], [], []
+X_eval_max, y_eval_max, X_eval_min, y_eval_min = [], [], [], []
+X_train, y_train = [], []
 Wm, Wc = None, None
 
 start = time.time()
@@ -79,30 +81,32 @@ for file in tqdm(batch_files, desc="[INFO] Loading batches"):
         else:
             print("         ⚠️  Covariance deviates from P_init.")
 
-    X_all.append(Xb)
-    y_all.append(yb)
+    for t in t_max_neighbors_eval:
+        idx = np.round(Xb[:, 0], 6) == np.round(t, 6)
+        if np.any(idx):
+            X_eval_max.append(Xb[idx])
+            y_eval_max.append(yb[idx])
 
-    for t_extract, X_list, y_list, label in [
-        (t_max_neighbors, X_max, y_max, "max"),
-        (t_min_neighbors, X_min, y_min, "min")
-    ]:
-        matched_any = False
-        for t in t_extract:
-            idx = np.round(Xb[:, 0], 6) == np.round(t, 6)
-            if np.any(idx):
-                X_list.append(Xb[idx])
-                y_list.append(yb[idx])
-                matched_any = True
-        if not matched_any:
-            print(f"[WARN] No data in {file} for {label} times {t_extract}")
+    for t in t_min_neighbors_eval:
+        idx = np.round(Xb[:, 0], 6) == np.round(t, 6)
+        if np.any(idx):
+            X_eval_min.append(Xb[idx])
+            y_eval_min.append(yb[idx])
+    
+    for t in t_train_neighbors:
+        idx = np.round(Xb[:, 0], 6) == np.round(t, 6)
+        if np.any(idx):
+            X_train.append(Xb[idx])
+            y_train.append(yb[idx])
 
-# === Stack all data
-X_full = np.vstack(X_all)
-y_full = np.vstack(y_all)
-X_max = np.vstack(X_max)
-y_max = np.vstack(y_max)
-X_min = np.vstack(X_min)
-y_min = np.vstack(y_min)
+# === Stack the training data and evaluation data
+X_full = np.vstack(X_train)
+y_full = np.vstack(y_train)
+
+X_max = np.vstack(X_eval_max)
+y_max = np.vstack(y_eval_max)
+X_min = np.vstack(X_eval_min)
+y_min = np.vstack(y_eval_min)
 
 # === Deduplicate σ-point rows at t₀ (keep last per group)
 df_X = pd.DataFrame(X_full)
@@ -115,15 +119,28 @@ group_cols = ['t', 'sigma_idx', 'bundle_idx']
 df_dedup = df_X.groupby(group_cols, sort=False).tail(1).sort_values("orig_index")
 X_full_cleaned = df_dedup.drop(columns=["orig_index"]).to_numpy()
 y_full_cleaned = df_y.iloc[df_dedup["orig_index"].values].to_numpy()
-print(f"[INFO] Deduplicated rows: from {len(X_full)} → {len(X_full_cleaned)}")
+print(f"[INFO] Deduplicated rows: from {len(X_full)} -> {len(X_full_cleaned)}")
 
 # === Remove appended sigma₀ rows (used only for eval, not training)
 is_sigma0 = X_full_cleaned[:, -1] == 0
 is_zero_cov = np.all(np.isclose(X_full_cleaned[:, 8:15], 0.0, atol=1e-12), axis=1)
 is_appended_sigma0 = is_sigma0 & is_zero_cov
-print(f"[FILTER] Removing {np.sum(is_appended_sigma0)} appended σ₀ rows from X_full...")
+print(f"[FILTER] Removing {np.sum(is_appended_sigma0)} appended sigma₀ rows from X_full...")
 X_full_cleaned = X_full_cleaned[~is_appended_sigma0]
 y_full_cleaned = y_full_cleaned[~is_appended_sigma0]
+
+# === Calculate and save min/max covariance values for replanning script
+# Ensure we don't include the appended sigma0 rows (which have zero covs)
+non_zero_cov_rows = X_full_cleaned[~np.all(np.isclose(X_full_cleaned[:, 8:15], 0.0, atol=1e-12), axis=1)]
+if non_zero_cov_rows.size > 0:
+    diag_mins = np.min(non_zero_cov_rows[:, 8:15], axis=0)
+    diag_maxs = np.max(non_zero_cov_rows[:, 8:15], axis=0)
+    np.save("diag_mins.npy", diag_mins)
+    np.save("diag_maxs.npy", diag_maxs)
+    print(f"[INFO] Saved diag_mins.npy: {diag_mins}")
+    print(f"[INFO] Saved diag_maxs.npy: {diag_maxs}")
+else:
+    print("[WARN] No non-zero covariance rows found to calculate min/max diagonals.")
 
 # === Time check
 print("\n[CHECK] Unique times in X_full:")

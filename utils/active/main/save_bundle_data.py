@@ -8,6 +8,32 @@ from tqdm import tqdm
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
+import rv2mee
+import odefunc
+import mee2rv
+# === User's provided function ===
+def compute_thrust_direction(mu, F, mee, lam):
+    p, f, g, h, k, L = mee
+    lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = lam[:-1]
+    lam_matrix = np.array([[lam_p, lam_f, lam_g, lam_h, lam_k, lam_L]]).T
+    SinL, CosL = np.sin(L), np.cos(L)
+    w = 1 + f * CosL + g * SinL
+    if np.isclose(w, 0, atol=1e-10):
+        return np.full(3, np.nan)
+    s = 1 + h**2 + k**2
+    C1 = np.sqrt(p / mu)
+    C2 = 1 / w
+    C3 = h * SinL - k * CosL
+    A = np.array([
+        [0, 2 * p * C2 * C1, 0],
+        [C1 * SinL, C1 * C2 * ((w + 1) * CosL + f), -C1 * (g / w) * C3],
+        [-C1 * CosL, C1 * C2 * ((w + 1) * SinL + g), C1 * (f / w) * C3],
+        [0, 0, C1 * s * CosL * C2 / 2],
+        [0, 0, C1 * s * SinL * C2 / 2],
+        [0, 0, C1 * C2 * C3]
+    ])
+    mat = A.T @ lam_matrix
+    return mat.flatten() / np.linalg.norm(mat)
 
 def stream_initial_csv_for_multiple_bundles(
     backTspan, r_bundles, v_bundles, mass_bundles, new_lam_bundles,
@@ -52,7 +78,6 @@ def stream_initial_csv_for_multiple_bundles(
 
     print(f"Saved initial bundle states to {output_filename}")
 
-
 def main():
     mu_s = 132712 * 10**6 * 1e9
     p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
@@ -68,6 +93,16 @@ def main():
                 p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU,
                 num_bundles, time_resolution_minutes
             )
+        
+        # Calculate nominal thrust vector
+        del_t_nom = np.zeros((r_tr.shape[0], 3))
+        # The nominal lambda values are assumed to be in the first bundle
+        nominal_lam = new_lam_bundles[:, :, 0]
+        for i in range(r_tr.shape[0]):
+            # Get MEE from the nominal Cartesian state
+            mee = rv2mee.rv2mee(r_tr[i], v_tr[i], mu)
+            # Use the compute_thrust_direction function to get the thrust vector
+            del_t_nom[i] = compute_thrust_direction(mu, F, mee, nominal_lam[i])
 
         out_dir = f"stride_{time_resolution_minutes}min"
         os.makedirs(out_dir, exist_ok=True)
@@ -84,7 +119,8 @@ def main():
             "new_lam_bundles": new_lam_bundles,
             "mass_bundles": mass_bundles,
             "backTspan": backTspan,
-            "mu": mu, "F": F, "c": c, "m0": m0, "g0": g0
+            "mu": mu, "F": F, "c": c, "m0": m0, "g0": g0,
+            "del_t_nom": del_t_nom
         }, out_pkl)
         print(f"Saved: {out_pkl}")
 
@@ -95,7 +131,6 @@ def main():
             bundle_indices=list(range(num_bundles - 25)),
             output_filename=out_csv
         )
-
 
 if __name__ == "__main__":
     main()
