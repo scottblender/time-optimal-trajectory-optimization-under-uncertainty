@@ -14,7 +14,7 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
     Computes the spacecraft trajectory and generates perturbed trajectory bundles for Monte Carlo sampling.
     Now also returns mass history using mass directly from integration.
     """
-    step_seconds = time_resolution_minutes * 60  # 180 minutes → 10800 seconds
+    step_seconds = time_resolution_minutes * 60  # 180 minutes -> 10800 seconds
     resolution_nd = step_seconds / TU            # Convert to non-dimensional units
 
     # build tspan array
@@ -36,6 +36,9 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
     # Extract position and velocity from the integrated state vector
     state = Sf.y[0:7, :]
     r_tr, v_tr = mee2rv.mee2rv(state[0, :], state[1, :], state[2, :], state[3, :], state[4, :], state[5, :], mu)
+
+    # Extract the nominal lambda history
+    lam_tr = Sf.y[7:, :].T
 
     # Directly use the mass history from integration results
     mass_tr = Sf.y[6, :]  # No need to integrate m_dot manually
@@ -112,4 +115,4 @@ def compute_bundle_trajectory_params(p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0,
         new_lam_bundles[:, :, index] = bundle_Sf[7:, :].T
         mass_bundles[:, index] = mass_pert  # Store mass history
 
-    return r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan
+    return r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan, lam_tr

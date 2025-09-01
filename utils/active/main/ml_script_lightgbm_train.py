@@ -30,14 +30,14 @@ with open("stride_4000min/bundle_segment_widths.txt") as f:
     if min_idx == len(times_arr) - 1:
         sorted_indices = np.argsort(times_arr[:, 1])
         min_idx = sorted_indices[1]
-
+    n = 50
     t_max_neighbors_eval = time_vals[max(0, max_idx - 1): max_idx + 2]
     t_min_neighbors_eval = time_vals[max(0, min_idx - 1): min_idx + 2]
-    t_train_neighbors = time_vals[max(0, max_idx - 3): max_idx + 4]
+    t_train_neighbors = time_vals[max(0, max_idx - n): max_idx + n + 1]
 
     print(f"[INFO] Max segment times (for eval): {t_max_neighbors_eval}")
     print(f"[INFO] Min segment times (for eval): {t_min_neighbors_eval}")
-    print(f"[INFO] Training times (t_max +/- 3): {t_train_neighbors}")
+    print(f"[INFO] Training times (t_max +/- {n}): {t_train_neighbors}")
 
 # === Init containers ===
 X_eval_max, y_eval_max, X_eval_min, y_eval_min = [], [], [], []
@@ -167,10 +167,10 @@ print("[SUCCESS] Both segment_max and segment_min include all 50 bundles.")
 # === Train model
 print("[INFO] Training LightGBM model...")
 base_model = LGBMRegressor(
-    n_estimators=300,
-    learning_rate=0.03,
-    max_depth=6,
-    min_child_samples=20,
+    n_estimators=1500,
+    learning_rate=0.005,
+    max_depth=15,
+    min_child_samples=10,
     force_row_wise=True,
     random_state=42,
     verbose=1

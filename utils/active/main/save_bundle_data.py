@@ -9,9 +9,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'h
 import compute_nominal_trajectory_params
 import compute_bundle_trajectory_params
 import rv2mee
-import odefunc
-import mee2rv
-# === User's provided function ===
+
+# === Thrust Function ===
 def compute_thrust_direction(mu, F, mee, lam):
     p, f, g, h, k, L = mee
     lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = lam[:-1]
@@ -79,7 +78,6 @@ def stream_initial_csv_for_multiple_bundles(
     print(f"Saved initial bundle states to {output_filename}")
 
 def main():
-    mu_s = 132712 * 10**6 * 1e9
     p_sol, tfound, s0, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU = compute_nominal_trajectory_params.compute_nominal_trajectory_params()
 
     num_bundles = 50
@@ -88,7 +86,7 @@ def main():
     for time_resolution_minutes in time_resolution_list:
         print(f"\n[INFO] Generating bundle data at {time_resolution_minutes} min resolution...")
 
-        r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan = \
+        r_tr, v_tr, mass_tr, S_bundles, r_bundles, v_bundles, new_lam_bundles, mass_bundles, backTspan, lam_tr = \
             compute_bundle_trajectory_params.compute_bundle_trajectory_params(
                 p_sol, s0, tfound, mu, F, c, m0, g0, R_V_0, V_V_0, DU, TU,
                 num_bundles, time_resolution_minutes
@@ -96,8 +94,8 @@ def main():
         
         # Calculate nominal thrust vector
         del_t_nom = np.zeros((r_tr.shape[0], 3))
-        # The nominal lambda values are assumed to be in the first bundle
-        nominal_lam = new_lam_bundles[:, :, 0]
+        # Now use the correct nominal lambda history from lam_tr
+        nominal_lam = lam_tr
         for i in range(r_tr.shape[0]):
             # Get MEE from the nominal Cartesian state
             mee = rv2mee.rv2mee(r_tr[i], v_tr[i], mu)
@@ -120,7 +118,8 @@ def main():
             "mass_bundles": mass_bundles,
             "backTspan": backTspan,
             "mu": mu, "F": F, "c": c, "m0": m0, "g0": g0,
-            "del_t_nom": del_t_nom
+            "del_t_nom": del_t_nom,
+            "lam_tr": lam_tr  # Save the nominal lambda history
         }, out_pkl)
         print(f"Saved: {out_pkl}")
 
