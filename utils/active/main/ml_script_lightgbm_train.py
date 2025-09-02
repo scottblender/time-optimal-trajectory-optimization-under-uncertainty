@@ -30,7 +30,7 @@ with open("stride_4000min/bundle_segment_widths.txt") as f:
     if min_idx == len(times_arr) - 1:
         sorted_indices = np.argsort(times_arr[:, 1])
         min_idx = sorted_indices[1]
-    n = 50
+    n = 200
     t_max_neighbors_eval = time_vals[max(0, max_idx - 1): max_idx + 2]
     t_min_neighbors_eval = time_vals[max(0, min_idx - 1): min_idx + 2]
     t_train_neighbors = time_vals[max(0, max_idx - n): max_idx + n + 1]
