@@ -56,7 +56,7 @@ def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.25, scale=3.0):
                       rstride=5, cstride=5, color='k', alpha=0.2, linewidth=0.3)
 
 def compute_thrust_direction(mu, F, mee, lam):
-    p, f, g, h, k, L = mee[:-1]
+    p, f, g, h, k, L = mee
     lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = lam[:-1]
     lam_matrix = np.array([[lam_p, lam_f, lam_g, lam_h, lam_k, lam_L]]).T
     SinL, CosL = np.sin(L), np.cos(L)
@@ -172,10 +172,81 @@ def main():
     # Initialize a dictionary to hold deviation history for each covariance level
     deviation_history_dict = {}
 
+    # === Define the initial covariance of the Monte Carlo samples and the threshold ===
+    # Use the full P_cart for the initial covariance and calculate the threshold for each diagonal element.
+    initial_cov_diag = np.diag(P_cart)
+    threshold = 100 * initial_cov_diag
+
+    time_exceeded_dict = {}
+    
     for level, P_model in P_models.items():
         print(np.diag(P_model))
         print(f"  Level: {level} — propagating MC...")
+        
         mc_endpoints = []
+        
+        # We need to collect full trajectories to check covariance over time
+        all_mc_r = []
+        all_mc_states = []
+        
+        for i, s in enumerate(shared_samples):
+            try:
+                mee = np.hstack([rv2mee(s[:3].reshape(1, 3), s[3:6].reshape(1, 3), mu).flatten(), s[6]])
+                x_input = np.hstack([t_start_replan, mee, np.diag(P_model)])
+                x_df = pd.DataFrame([x_input], columns= ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass',
+                'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'])
+                lam = model.predict(x_df)[0]
+                S = np.hstack([mee, lam])
+                
+                # Propagate and store the full trajectory
+                sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0),
+                                [t_start_replan, t_end_replan], S, t_eval=np.linspace(t_start_replan, t_end_replan, 100))
+                r, v = mee2rv(*sol.y[:6], mu)
+                
+                # Stack position, velocity, and mass for full state covariance
+                full_states = np.vstack([r.T, v.T, sol.y[6,:]]).T
+                
+                all_mc_r.append(r)
+                all_mc_states.append(full_states)
+                
+                mc_endpoints.append(r[-1])
+            except Exception as e:
+                print(f"  [WARN] Sample {i} failed to propagate: {e}")
+                continue
+
+        mc_endpoints = np.array(mc_endpoints)
+        
+        # === Check for covariance exceeding the threshold over time ===
+        time_exceeded = None
+        sol_times = np.linspace(t_start_replan, t_end_replan, 100)
+        
+        if all_mc_states:
+            all_mc_states = np.array(all_mc_states) # Shape (n_samples, n_timesteps, 7)
+            
+            for t_idx, t in enumerate(sol_times):
+                # Extract state vectors for all samples at this time step
+                states_at_t = all_mc_states[:, t_idx, :]
+                
+                # Calculate the mean of the state vectors at this time
+                mu_states = np.mean(states_at_t, axis=0)
+                
+                # Calculate the covariance using einsum
+                deviations = states_at_t - mu_states
+                # Use np.cov for simplicity and numerical stability, it's equivalent
+                current_cov = np.cov(states_at_t.T)
+                
+                # Check if ANY diagonal element of the current covariance exceeds its corresponding threshold
+                current_cov_diag = np.diag(current_cov)
+                
+                # Using np.any() to check if at least one element meets the condition
+                if np.any(current_cov_diag >= threshold):
+                    time_exceeded = t
+                    print(f"For uncertainty level '{level}', at least one diagonal covariance element exceeded its threshold at time: {time_exceeded:.2f} TU.")
+            
+        time_exceeded_dict[level] = time_exceeded
+        
+        # --- The rest of your plotting and analysis code follows ---
+        
         fig = plt.figure(figsize=(6.5, 5.5))
         ax = fig.add_subplot(111, projection='3d')
         
@@ -185,81 +256,47 @@ def main():
         ax.scatter(*replan_r_nom[0], color='black', s=20, label="Start", zorder=5)
         ax.scatter(*replan_r_nom[-1], color='black', s=20, marker='X', label="End")
 
-        mee0 = np.hstack([rv2mee(r_nom[nominal_plot_start_idx].reshape(1, 3), v_nom[nominal_plot_start_idx].reshape(1, 3), mu).flatten(), mass_nom[nominal_plot_start_idx]])
-
-        x_input_pred = np.hstack([t_start_replan, mee0, np.diag(P_model)])
+        x_input_pred = np.hstack([t_start_replan, nominal_state_replan_start[:7], np.diag(P_model)])
         x_df_pred = pd.DataFrame([x_input_pred], columns=['t', 'p', 'f', 'g', 'h', 'k','L', 'mass',
                 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'])
         lam_pred = model.predict(x_df_pred)[0]
 
-        del_t_pred = compute_thrust_direction(mu, F_val, mee0, lam_pred)
+        del_t_pred = compute_thrust_direction(mu, F_val, nominal_state_replan_start[:6], lam_pred)
 
         del_t_diff = del_t_pred - del_t_nom_start
         print(f"Predicted thrust vector for {level} covariance: {del_t_pred}")
         print(f"Nominal thrust vector: {del_t_nom_start}")
         print(f"Difference (Predicted - Nominal): {del_t_diff}")
 
-        mc_trajectories_r = []
-        for i, s in enumerate(shared_samples):
-            try:
-                mee = np.hstack([rv2mee(s[:3].reshape(1, 3), s[3:6].reshape(1, 3), mu).flatten(), s[6]])
-                x_input = np.hstack([t_start_replan, mee, np.diag(P_model)])
-                x_df = pd.DataFrame([x_input], columns= ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass',
-                'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'])
-                lam = model.predict(x_df)[0]
-                S = np.hstack([mee, lam])
-                sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0),
-                                [t_start_replan, t_end_replan], S, t_eval=np.linspace(t_start_replan, t_end_replan, 100))
-                r, _ = mee2rv(*sol.y[:6], mu)
-                if i % 10 == 0:
-                    ax.plot(r[:, 0], r[:, 1], r[:, 2], linestyle=':', color='red', lw=1.5, alpha=0.6)
-                    ax.scatter(*r[-1], color='red', s=5, lw=1.5, marker='X', alpha=0.5)
-                mc_trajectories_r.append(r)
-                mc_endpoints.append(r[-1])
-            except Exception as e:
-                print(f"  [WARN] Sample {i} failed to propagate: {e}")
-                continue
+        # Plot a subset of the Monte Carlo trajectories for visualization
+        for i in range(0, len(all_mc_r), 10):
+            r = all_mc_r[i]
+            ax.plot(r[:, 0], r[:, 1], r[:, 2], linestyle=':', color='red', lw=1.5, alpha=0.6)
+            ax.scatter(*r[-1], color='red', s=5, lw=1.5, marker='X', alpha=0.5)
 
-        mc_endpoints = np.array(mc_endpoints)
-        mu_mc_endpoints = np.mean(mc_endpoints, axis=0) # MC mean at endpoints
+        mc_mean_trajectory_r = np.mean(all_mc_r, axis=0)
+        mu_mc_endpoints = np.mean(mc_endpoints, axis=0)
         
-        # Calculate the full MC mean trajectory over the time span
-        mc_trajectories_r = np.array(mc_trajectories_r)
-        mc_mean_trajectory_r = np.mean(mc_trajectories_r, axis=0)
-
-        # Print the deviation at the endpoints to show the final state
         print(f"MC Mean Trajectory (Endpoints) Deviation from Nominal: {mu_mc_endpoints - replan_r_nom[-1]}")
         
-        cov_mc = np.einsum("ni,nj->ij", mc_endpoints - mu_mc_endpoints, mc_endpoints - mu_mc_endpoints) / mc_endpoints.shape[0]
+        # Use np.einsum to calculate final covariance
+        cov_mc = np.einsum("ni,nj->ij", mc_endpoints - mu_mc_endpoints, mc_endpoints - mu_mc_endpoints) / (mc_endpoints.shape[0] - 1)
         eigvals = np.maximum(np.linalg.eigvalsh(cov_mc), 0)
         print(eigvals)
         volume = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals))
         plot_3sigma_ellipsoid(ax, mu_mc_endpoints, cov_mc, color='gray', alpha=0.25)
 
         # === Calculate and store deviation history ===
-        # Calculate the deviation at each time step and convert to km
         deviation_history_du = mc_mean_trajectory_r - replan_r_nom
         deviation_history_km = deviation_history_du * DU_km
 
-        # Store the deviation history for the current covariance level
         deviation_history_dict[level] = deviation_history_km
         # ============================================
 
         inset_ax = fig.add_axes([0.63, 0.73, 0.34, 0.34], projection='3d')
-        for i, s in enumerate(shared_samples[::10]):
-            try:
-                mee = np.hstack([rv2mee(s[:3].reshape(1, 3), s[3:6].reshape(1, 3), mu).flatten(), s[6]])
-                x_input = np.hstack([t_start_replan, mee, np.diag(P_model)])
-                x_df = pd.DataFrame([x_input], columns= ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass',
-                'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'])
-                lam = model.predict(x_df)[0]
-                S = np.hstack([mee, lam])
-                sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0),
-                                [t_start_replan, t_end_replan], S, t_eval=np.linspace(t_start_replan, t_end_replan, 100))
-                r, _ = mee2rv(*sol.y[:6], mu)
-                inset_ax.scatter(*r[-1], color='0.6', s=5, marker='X', alpha=0.5)
-            except:
-                continue
+        for i in range(0, len(all_mc_r), 10):
+            r = all_mc_r[i]
+            inset_ax.scatter(*r[-1], color='0.6', s=5, marker='X', alpha=0.5)
 
         plot_3sigma_ellipsoid(inset_ax, mu_mc_endpoints, cov_mc, color='gray', alpha=0.3)
         center = mu_mc_endpoints
@@ -297,7 +334,8 @@ def main():
             "t_start_replan": t_start_replan,
             "uncertainty": level,
             "volume": volume,
-            "n_samples": len(mc_endpoints)
+            "n_samples": len(mc_endpoints),
+            "time_to_exceed_threshold": time_exceeded
         })
 
     df = pd.DataFrame(summary)
