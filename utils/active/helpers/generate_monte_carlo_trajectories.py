@@ -163,7 +163,7 @@ def generate_monte_carlo_trajectories_parallel(
         [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
         [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
     ])
-    P_control = np.eye(7) * 1e-13
+    P_control = np.eye(7) * 1e-16
 
     substeps = 10
     evals_per_substep = 20

@@ -243,7 +243,7 @@ def ellipsoid_3sigma_volume(P_pos, DU_km=696340.0):
 # =========================
 
 def main():
-    stride_minutes_list = np.arange(1000, 6001, 500)
+    stride_minutes_list = np.arange(120, 1441, 120)
 
     for stride_minutes in stride_minutes_list:
         start_time = time.time()
@@ -283,16 +283,24 @@ def main():
             plt.savefig(f"{out_root}/{name}.pdf", dpi=600, bbox_inches='tight', pad_inches=0.5)
             plt.close()
 
-        # === Segment width computation ===
+       # === Segment width computation ===
         widths = []
+        tf = forwardTspan[-1]
+        cutoff_time = tf
+
         for t in range(r_b.shape[0]):
+            if forwardTspan[t] > cutoff_time:
+                break  # stop checking after tf
             points = r_b[t].T
             dists = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=2)
             max_dist = np.max(dists)
             widths.append((forwardTspan[t], max_dist))
-        widths_array = np.array(widths)
-        np.savetxt(f"{out_root}/bundle_segment_widths.txt", widths_array, fmt="%.6f", header="time_sec width_km")
 
+        widths_array = np.array(widths)
+        np.savetxt(f"{out_root}/bundle_segment_widths.txt", widths_array,
+                fmt="%.6f", header="time_sec width_km")
+
+        # Restrict max/min search to the [0, tf] interval
         max_t_idx = int(np.argmax(widths_array[:, 1]))
         min_t_idx = int(np.argmin(widths_array[:, 1]))
         if min_t_idx == len(widths_array) - 1:
@@ -302,7 +310,7 @@ def main():
         print(f"[INFO] Max width at t = {widths_array[max_t_idx, 0]:.2f} TU → {widths_array[max_t_idx, 1]:.6f} km")
         print(f"[INFO] Min width at t = {widths_array[min_t_idx, 0]:.2f} TU → {widths_array[min_t_idx, 1]:.6f} km")
 
-        for label, idx in [("max", max_t_idx),("min", min_t_idx)]:
+        for label, idx in [("min", min_t_idx), ("max", max_t_idx)]:
             dists = np.linalg.norm(r_b[idx] - r_tr[idx][:, np.newaxis], axis=0)
             bundle_farthest = int(np.argmax(dists))
             bundle_closest = int(np.argmin(dists))
