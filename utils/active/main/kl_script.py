@@ -97,7 +97,7 @@ def main():
             cov_mc = np.loadtxt(mc_path) if os.path.exists(mc_path) else np.full((7, 7), np.nan)
             max_tr_sigma = extract_max_position_trace(cov_sigma)
             max_tr_mc = extract_max_position_trace(cov_mc)
-            cov_ratio = max_tr_sigma / max_tr_mc if max_tr_mc > 1e-12 else np.nan
+            cov_ratio = max_tr_sigma / max_tr_mc 
             max_mahal, mean_mahal = read_mahalanobis(segment_dir)
 
             row = {
@@ -151,8 +151,8 @@ def main():
             1.0 * mean_kl +
             8.0 * max_cov +
             1.0 * cov_mismatch +
-            #1.5 * max_mahal +
-            #0.5 * mean_mahal +
+            1.5 * max_mahal +
+            0.5 * mean_mahal +
             1e-9 * data_size
         )
 
@@ -162,8 +162,8 @@ def main():
             "max_KL": max_kl,
             "max_cov": max_cov,
             "cov_mismatch": cov_mismatch,
-            #"max_mahalanobis": max_mahal,
-            #"mean_mahalanobis": mean_mahal,
+            "max_mahalanobis": max_mahal,
+            "mean_mahalanobis": mean_mahal,
             "estimated_data_size": data_size,
             "score": score
         })

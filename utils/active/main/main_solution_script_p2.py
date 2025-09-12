@@ -9,7 +9,7 @@ from solve_trajectories import solve_trajectories_with_covariance_parallel_with_
 
 def main():
     print("Loading bundle data...")
-    stride_minutes = 4000
+    stride_minutes = 1440
     bundle_path = f"stride_{stride_minutes}min/bundle_data_{stride_minutes}min.pkl"
     data = joblib.load(bundle_path)
     r_bundles = data["r_bundles"][::-1]

@@ -161,12 +161,6 @@ def _solve_single_bundle(args):
             P_combined_cartesian = np.einsum("i,ijk,ijl->jkl", Wc, deviations_cartesian, deviations_cartesian)
             P_combined_cartesian_diag = np.array([np.diag(np.diag(P)) for P in P_combined_cartesian])
 
-            # --- Regularize covariance matrices to avoid numerical blow-up ---
-            eps = np.finfo(np.float64).eps
-            for t in range(P_combined_diag.shape[0]):
-                P_combined_diag[t][:, :] += np.eye(P_combined_diag.shape[1]) * eps
-                P_combined_cartesian_diag[t][:, :] += np.eye(P_combined_cartesian_diag.shape[1]) * eps
-
             for t in range(len(P_combined_diag)):
                 cov_diag = np.diag(P_combined_diag[t])
                 eigvals = np.diag(P_combined_cartesian_diag[t])

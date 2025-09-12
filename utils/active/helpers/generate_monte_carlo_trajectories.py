@@ -150,7 +150,7 @@ def generate_monte_carlo_trajectories_parallel(
     VU_kms = DU_km / TU # Convert m/s to km/s using g0
 
     # Set desired physical covariances (e.g., 0.1 km², 1e-4 (km/s)², 1 kg²)
-    P_pos_km2 = np.eye(3) * 0.1        # km²
+    P_pos_km2 = np.eye(3) * 0.01        # km²
     P_vel_kms2 = np.eye(3) * 1e-10      # (km/s)²
     P_mass_kg2 = np.array([[1e-3]])     # kg²
 

@@ -5,7 +5,8 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from numpy.linalg import inv
+from numpy.linalg import pinv
+from scipy.spatial.distance import mahalanobis
 from tqdm import tqdm
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
@@ -286,11 +287,11 @@ def main():
        # === Segment width computation ===
         widths = []
         tf = forwardTspan[-1]
-        cutoff_time = tf
+        cutoff_time = 3/4*tf
 
         for t in range(r_b.shape[0]):
             if forwardTspan[t] > cutoff_time:
-                break  # stop checking after tf
+                break  # stop checking after cutoff time
             points = r_b[t].T
             dists = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=2)
             max_dist = np.max(dists)
@@ -300,7 +301,7 @@ def main():
         np.savetxt(f"{out_root}/bundle_segment_widths.txt", widths_array,
                 fmt="%.6f", header="time_sec width_km")
 
-        # Restrict max/min search to the [0, tf] interval
+        # Restrict max/min search to the [0, cutoff time] interval
         max_t_idx = int(np.argmax(widths_array[:, 1]))
         min_t_idx = int(np.argmin(widths_array[:, 1]))
         if min_t_idx == len(widths_array) - 1:
@@ -315,7 +316,7 @@ def main():
             bundle_farthest = int(np.argmax(dists))
             bundle_closest = int(np.argmin(dists))
 
-            for mode, bundle_idx in [("closest", bundle_closest),("farthest", bundle_farthest)]:
+            for mode, bundle_idx in [("farthest", bundle_farthest),("closest", bundle_closest)]:
                 print(f"[INFO] {label.upper()} segment — {mode} bundle idx = {bundle_idx}")
                 r0 = r_b[:, :, bundle_idx][:, :, np.newaxis]
                 v0 = v_b[:, :, bundle_idx][:, :, np.newaxis]
@@ -476,42 +477,42 @@ def main():
                 kl_vals = [compute_kl_divergence(mu_sigma[0, t], P_sigma[0, t], mu_mc[0, 0, t], P_mc[0, 0, t])
                            for t in range(P_sigma.shape[1])]
 
-                # Mahalanobis distance squared per timestep
-                for t in range(P_sigma.shape[1]):
-                    diff = mu_sigma[0, t] - mu_mc[0, 0, t]
-                    cov_inv = inv(P_mc[0, 0, t] + 1e-12 * np.eye(7))
-                    d2 = diff.T @ cov_inv @ diff
-                    print(f"[MAHAL@t={t:02d}] Mahalanobis² = {d2:.3f} — |μ_SP − μ_MC| = {np.linalg.norm(diff):.3e}")
+                # # Mahalanobis distance squared per timestep
+                # for t in range(P_sigma.shape[1]):
+                #     diff = mu_sigma[0, t] - mu_mc[0, 0, t]
+                #     cov_inv = pinv(P_mc[0, 0, t]) 
+                #     d2 = diff.T @ cov_inv @ diff
+                #     print(f"[MAHAL@t={t:02d}] Mahalanobis² = {d2:.3f} — |μ_SP − μ_MC| = {np.linalg.norm(diff):.3e}")
 
                 np.savetxt(f"{out_dir}/kl_divergence.txt", kl_vals, fmt="%.18f")
                 np.savetxt(f"{out_dir}/cov_sigma_final.txt", P_sigma[0, -1], fmt="%.18f")
                 np.savetxt(f"{out_dir}/cov_mc_final.txt", P_mc[0, 0, -1], fmt="%.18f")
 
-                print(f"MC: {np.diag(P_mc[0,0,-1])}")
-                print(f"SP: {np.diag(P_sigma[0,-1])}")
+                # print(f"MC: {np.diag(P_mc[0,0,-1])}")
+                # print(f"SP: {np.diag(P_sigma[0,-1])}")
 
-                delta_mu = mu_sigma - mu_mc
-                mean_error_norm = np.linalg.norm(delta_mu)
-                print(f"[DEBUG] Mean difference norm: {mean_error_norm:.6f}")
+                # delta_mu = mu_sigma - mu_mc
+                # mean_error_norm = np.linalg.norm(delta_mu)
+                # print(f"[DEBUG] Mean difference norm: {mean_error_norm:.6f}")
 
-                cov_norms = []
-                for t in range(P_sigma.shape[1]):
-                    P_sp = P_sigma[0, t]
-                    P_mc_t = P_mc[0, 0, t]
-                    cov_diff = P_sp - P_mc_t
-                    frob_norm = np.linalg.norm(cov_diff, ord='fro')
-                    cov_norms.append(frob_norm)
-                    print(f"[COV NORM @ t={t:03d}] ‖ΔP‖_F = {frob_norm:.3e}")
+                # cov_norms = []
+                # for t in range(P_sigma.shape[1]):
+                #     P_sp = P_sigma[0, t]
+                #     P_mc_t = P_mc[0, 0, t]
+                #     cov_diff = P_sp - P_mc_t
+                #     frob_norm = np.linalg.norm(cov_diff, ord='fro')
+                #     cov_norms.append(frob_norm)
+                #     print(f"[COV NORM @ t={t:03d}] ‖ΔP‖_F = {frob_norm:.3e}")
 
-                for t in range(P_sigma.shape[1]):
-                    mu_sp_t = mu_sigma[0, t]
-                    mu_mc_t = mu_mc[0, 0, t]
-                    delta_mu = mu_sp_t - mu_mc_t
-                    P_sp = P_sigma[0, t]
-                    P_mc_t = P_mc[0, 0, t]
-                    D2_sp = delta_mu.T @ inv(P_sp) @ delta_mu
-                    D2_mc = delta_mu.T @ inv(P_mc_t) @ delta_mu
-                    print(f"[MHAL@t={t:03d}] SP = {D2_sp:.2e}, MC = {D2_mc:.2e}, Δ = {abs(D2_sp - D2_mc):.2e}")
+                # for t in range(P_sigma.shape[1]):
+                #     mu_sp_t = mu_sigma[0, t]
+                #     mu_mc_t = mu_mc[0, 0, t]
+                #     delta_mu = mu_sp_t - mu_mc_t
+                #     P_sp = P_sigma[0, t]
+                #     P_mc_t = P_mc[0, 0, t]
+                #     D2_sp = delta_mu.T @ pinv(P_sp) @ delta_mu
+                #     D2_mc = delta_mu.T @ pinv(P_mc_t) @ delta_mu
+                #     print(f"[MHAL@t={t:03d}] SP = {D2_sp:.2e}, MC = {D2_mc:.2e}, Δ = {abs(D2_sp - D2_mc):.2e}")
 
                 final_time = forwardTspan[idx + 1]
                 mask = np.isclose(X_sigma[:, 0], final_time) & (X_sigma[:, -2] == bundle_idx) & (X_sigma[:, -1] == 0) & np.all(X_sigma[:, 8:15] == 0, axis=1)
@@ -524,7 +525,21 @@ def main():
                 sigma0_final = np.hstack((r, v, [mee_final[6]]))
                 P_final = P_sigma[0, -1][:7, :7]
                 trajs = [np.concatenate([seg[i] for seg in traj[0]], axis=0) for i in range(len(traj[0][0]))]
-                mahal = [np.sqrt((x[-1, :7] - sigma0_final) @ inv(P_final+ 1e-6*np.eye(7)) @ (x[-1, :7] - sigma0_final)) for x in trajs[1:]]
+                mahal = []
+                for x in trajs[1:]: # Loop through each sigma point trajectory
+                    # 1. Calculate the difference vector
+                    final_traj = x[-1,:7]
+                    delta = final_traj - sigma0_final
+                    
+                    # 2. Solve the linear system P*y = delta to find y
+                    y = np.linalg.solve(P_final+2e-8*np.eye(7), delta)
+                    
+                    # 3. Calculate the squared distance with a dot product
+                    d_squared = np.dot(delta, y)
+                    
+                    # 4. Get the final distance and add it to our list
+                    distance = np.sqrt(max(0, d_squared))
+                    mahal.append(distance)
                 np.savetxt(f"{out_dir}/mahalanobis_distances.txt", mahal, fmt="%.12f")
                 with open(f"{out_dir}/ellipsoid_volumes.txt", "w") as f:
                     f.write("ellipsoid volume (position only)\n")
