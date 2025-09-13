@@ -221,9 +221,9 @@ def compute_kl_divergence(mu1, sigma1, mu2, sigma2, epsilon=1e-10):
     kl_div = 0.5 * (trace_term + quadratic_term - k + (ld2 - ld1))
 
     ev_sp = np.linalg.eigvalsh(sigma1_reg); ev_mc = np.linalg.eigvalsh(sigma2_reg)
-    print(f"[KL DEBUG] trace={trace_term:.4f} quad={quadratic_term:.4f} logdet={(ld2-ld1):.4f} total={kl_div:.4f}")
-    print(f"  SP eig min/max: {ev_sp.min():.2e} / {ev_sp.max():.2e}")
-    print(f"  MC eig min/max: {ev_mc.min():.2e} / {ev_mc.max():.2e}")
+    # print(f"[KL DEBUG] trace={trace_term:.4f} quad={quadratic_term:.4f} logdet={(ld2-ld1):.4f} total={kl_div:.4f}")
+    # print(f"  SP eig min/max: {ev_sp.min():.2e} / {ev_sp.max():.2e}")
+    # print(f"  MC eig min/max: {ev_mc.min():.2e} / {ev_mc.max():.2e}")
     return float(max(kl_div, 0.0))
 
 def ellipsoid_3sigma_volume(P_pos, DU_km=696340.0):
@@ -244,7 +244,7 @@ def ellipsoid_3sigma_volume(P_pos, DU_km=696340.0):
 # =========================
 
 def main():
-    stride_minutes_list = np.arange(120, 1441, 120)
+    stride_minutes_list = np.flip(np.arange(120, 1441, 120))
 
     for stride_minutes in stride_minutes_list:
         start_time = time.time()
@@ -311,7 +311,7 @@ def main():
         print(f"[INFO] Max width at t = {widths_array[max_t_idx, 0]:.2f} TU → {widths_array[max_t_idx, 1]:.6f} km")
         print(f"[INFO] Min width at t = {widths_array[min_t_idx, 0]:.2f} TU → {widths_array[min_t_idx, 1]:.6f} km")
 
-        for label, idx in [("min", min_t_idx), ("max", max_t_idx)]:
+        for label, idx in [("min", min_t_idx),("max", max_t_idx)]:
             dists = np.linalg.norm(r_b[idx] - r_tr[idx][:, np.newaxis], axis=0)
             bundle_farthest = int(np.argmax(dists))
             bundle_closest = int(np.argmin(dists))
@@ -530,9 +530,9 @@ def main():
                     # 1. Calculate the difference vector
                     final_traj = x[-1,:7]
                     delta = final_traj - sigma0_final
-                    
+                    epsilon = 1e-7
                     # 2. Solve the linear system P*y = delta to find y
-                    y = np.linalg.solve(P_final+2e-8*np.eye(7), delta)
+                    y = np.linalg.solve(P_final+epsilon*np.eye(7), delta)
                     
                     # 3. Calculate the squared distance with a dot product
                     d_squared = np.dot(delta, y)
