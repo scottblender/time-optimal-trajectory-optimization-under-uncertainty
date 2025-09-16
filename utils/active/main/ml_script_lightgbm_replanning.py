@@ -6,12 +6,9 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from numpy.linalg import eigh
 from scipy.integrate import solve_ivp
-from mpl_toolkits.mplot3d import Axes3D
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from tqdm import tqdm
 
-plt.rcParams.update({'font.size': 10})
 warnings.filterwarnings("ignore", category=UserWarning)
 os.environ['LGBM_LOGLEVEL'] = '2'
 
@@ -21,48 +18,19 @@ from mee2rv import mee2rv
 from rv2mee import rv2mee
 from odefunc import odefunc
 
-def set_axes_equal(ax):
-    x_limits, y_limits, z_limits = ax.get_xlim3d(), ax.get_ylim3d(), ax.get_zlim3d()
-    ranges = [abs(lim[1] - lim[0]) for lim in [x_limits, y_limits, z_limits]]
-    centers = [np.mean(lim) for lim in [x_limits, y_limits, z_limits]]
-    max_range = max(ranges) / 2
-    ax.set_xlim3d([centers[0] - max_range, centers[0] + max_range])
-    ax.set_ylim3d([centers[1] - max_range, centers[1] + max_range])
-    ax.set_zlim3d([centers[2] - max_range, centers[2] + max_range])
-    ax.set_box_aspect([1.25, 1, 0.75])
-    ax.grid(False)
-    ax.xaxis.pane.fill = False
-    ax.yaxis.pane.fill = False
-    ax.zaxis.pane.fill = False
-    ax.xaxis.pane.set_edgecolor('w')
-    ax.yaxis.pane.set_edgecolor('w')
-    ax.zaxis.pane.set_edgecolor('w')
+# --- ANALYSIS CONSTANT ---
+DEVIATION_THRESHOLD_KM = 100.0
 
-def plot_3sigma_ellipsoid(ax, mean, cov, color='gray', alpha=0.25, scale=3.0):
-    cov = 0.5 * (cov + cov.T) + np.eye(3) * 1e-10
-    vals, vecs = eigh(cov)
-    if np.any(vals <= 0): return
-    order = np.argsort(vals)[::-1]
-    vals, vecs = vals[order], vecs[:, order]
-    radii = scale * np.sqrt(vals)
-    u, v = np.linspace(0, 2*np.pi, 40), np.linspace(0, np.pi, 40)
-    x = radii[0] * np.outer(np.cos(u), np.sin(v))
-    y = radii[1] * np.outer(np.sin(u), np.sin(v))
-    z = radii[2] * np.outer(np.ones_like(u), np.cos(v))
-    ellipsoid = np.stack((x, y, z), axis=-1) @ vecs.T + mean
-    ax.plot_surface(ellipsoid[..., 0], ellipsoid[..., 1], ellipsoid[..., 2],
-                    rstride=1, cstride=1, color=color, alpha=alpha, linewidth=0)
-    ax.plot_wireframe(ellipsoid[..., 0], ellipsoid[..., 1], ellipsoid[..., 2],
-                      rstride=5, cstride=5, color='k', alpha=0.2, linewidth=0.3)
+# --- HELPER & PLOTTING FUNCTIONS ---
 
-def compute_thrust_direction(mu, F, mee, lam):
+def compute_thrust_direction(mu, mee, lam):
+    """Computes the optimal thrust direction vector from costates."""
     p, f, g, h, k, L = mee
     lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = lam[:-1]
     lam_matrix = np.array([[lam_p, lam_f, lam_g, lam_h, lam_k, lam_L]]).T
     SinL, CosL = np.sin(L), np.cos(L)
     w = 1 + f * CosL + g * SinL
-    if np.isclose(w, 0, atol=1e-10):
-        return np.full(3, np.nan)
+    if np.isclose(w, 0, atol=1e-10): return np.full(3, np.nan)
     s = 1 + h**2 + k**2
     C1 = np.sqrt(p / mu)
     C2 = 1 / w
@@ -76,115 +44,150 @@ def compute_thrust_direction(mu, F, mee, lam):
         [0, 0, C1 * C2 * C3]
     ])
     mat = A.T @ lam_matrix
-    return mat.flatten() / np.linalg.norm(mat)
+    norm = np.linalg.norm(mat)
+    return mat.flatten() / norm if norm > 0 else np.full(3, np.nan)
+
+def plot_full_replan_trajectory(r_nom, r_fval, r_mc_mean, replan_coords, window_type, level, t_start):
+    """Plots full X-Y trajectories and marks replanning events."""
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    ax.plot(r_nom[:, 0], r_nom[:, 1], color='0.0', linestyle='-', linewidth=1.5, label='Nominal (F_nom)', alpha=0.6)
+    ax.plot(r_fval[:, 0], r_fval[:, 1], color='0.5', linestyle='--', linewidth=1.2, label='Nominal (0.9*F_nom)', alpha=0.6)
+    ax.plot(r_mc_mean[:, 0], r_mc_mean[:, 1], color='0.2', linestyle=':', linewidth=2.0, label='MC Mean (Closed-Loop)')
+    
+    ax.scatter(r_nom[0, 0], r_nom[0, 1], c='0.2', marker='o', s=100, alpha=0.7, label='Start', zorder=5)
+    ax.scatter(r_nom[-1, 0], r_nom[-1, 1], c='0.0', marker='X', s=120, alpha=0.7, label='Nominal End', zorder=5)
+    
+    if replan_coords:
+        replan_arr = np.array(replan_coords)
+        ax.scatter(replan_arr[:, 0], replan_arr[:, 1], c='0.0', marker='*', s=180, alpha=0.6, label='Replanning Event', zorder=5)
+
+    ax.set_xlabel('X [DU]'); ax.set_ylabel('Y [DU]')
+    ax.legend(); ax.grid(True, linestyle=':'); ax.axis('equal')
+    
+    inset_ax = fig.add_axes([0.65, 0.15, 0.25, 0.25])
+    inset_ax.plot(r_nom[-4:, 0], r_nom[-4:, 1], color='black', linestyle='-', marker='o', markersize=3)
+    inset_ax.plot(r_fval[-4:, 0], r_fval[-4:, 1], color='0.5', linestyle='--', marker='p', markersize=3)
+    inset_ax.plot(r_mc_mean[-4:, 0], r_mc_mean[-4:, 1], color='0.2', linestyle=':', marker='*', markersize=4)
+    inset_ax.scatter(r_nom[-1, 0], r_nom[-1, 1], c='black', marker='X', s=50, alpha=0.7)
+    inset_ax.ticklabel_format(useOffset=False, style='plain')
+    inset_ax.set_title("Final Timesteps", fontsize=9)
+    inset_ax.grid(True, linestyle=':')
+
+    fig.tight_layout()
+    fname = f"full_replan_trajectory_{t_start:.3f}_{level}_{window_type}.pdf"
+    plt.savefig(os.path.join("uncertainty_aware_outputs", fname))
+    plt.close()
+    print(f"\n  [Saved Plot] {fname}")
+
+# --- MAIN SIMULATION FUNCTION ---
 
 def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, data, diag_mins, diag_maxs):
-    print("\n" + "="*20 + f" RUNNING FOR {window_type.upper()} WINDOW " + "="*20)
-    print(f"[t_start = {t_start_replan:.3f}] Replanning for window {t_start_replan:.2f} -> {t_end_replan:.2f} TU")
-
-    mu, F_nom, c, m0, g0= data["mu"], data["F"], data["c"], data["m0"], data["g0"]
-    r_nom, v_nom, mass_nom, lam_tr = data["r_tr"], data["v_tr"], data["mass_tr"], data["lam_tr"]
-    del_t_nom = data["del_t_nom"]
+    """Runs a closed-loop Monte Carlo simulation with detailed logging."""
+    print(f"\n--- Running Closed-Loop Sim for {window_type.upper()} WINDOW ---")
+    
+    mu, F_nom, c, m0, g0 = data["mu"], data["F"], data["c"], data["m0"], data["g0"]
+    r_nom_hist, v_nom_hist, mass_nom_hist, lam_tr = data["r_tr"], data["v_tr"], data["mass_tr"], data["lam_tr"]
     t_vals = np.asarray(data["backTspan"][::-1])
-    
-    rand_diag_1 = np.random.uniform(low=diag_mins, high=diag_maxs, size=len(diag_mins))
-    rand_diag_2 = np.random.uniform(low=diag_mins, high=diag_maxs, size=len(diag_mins))
-    P_models = {'random1': np.diag(rand_diag_1), 'random2': np.diag(rand_diag_2)}
-    
     DU_km = 696340.0
     F_val = 0.9 * F_nom
-    # --- NEW: Initialize lists to store new data ---
-    summary, distance_summary, thrust_summary = [], [], []
-
+    
+    rand_diags = {'random1': np.random.uniform(low=diag_mins, high=diag_maxs)}
+    
     idx_start = np.argmin(np.abs(t_vals - t_start_replan))
-    r0, v0, m0_val = r_nom[idx_start], v_nom[idx_start], mass_nom[idx_start]
+    r0, v0, m0_val = r_nom_hist[idx_start], v_nom_hist[idx_start], mass_nom_hist[idx_start]
     
-    nominal_state_replan_start = np.hstack([rv2mee(r0.reshape(1, 3), v0.reshape(1, 3), mu).flatten(), m0_val, lam_tr[idx_start]])
-    del_t_nom_start = del_t_nom[idx_start]
-
-    sol_nominal = solve_ivp(lambda t, x: odefunc(t, x, mu, F_nom, c, m0, g0), [t_start_replan, t_end_replan], nominal_state_replan_start, t_eval=np.linspace(t_start_replan, t_end_replan, 100))
-    replan_r_nom, _ = mee2rv(*sol_nominal.y[:6], mu)
-
-    sol_nominal_Fval = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_replan, t_end_replan], nominal_state_replan_start, t_eval=np.linspace(t_start_replan, t_end_replan, 100))
-    replan_r_Fval, _ = mee2rv(*sol_nominal_Fval.y[:6], mu)
+    t_eval = np.linspace(t_start_replan, t_end_replan, 100)
+    nominal_state_start = np.hstack([rv2mee(r0.reshape(1,3), v0.reshape(1,3), mu).flatten(), m0_val, lam_tr[idx_start]])
+    sol_nom = solve_ivp(lambda t, x: odefunc(t, x, mu, F_nom, c, m0, g0), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval)
+    replan_r_nom, _ = mee2rv(*sol_nom.y[:6], mu)
+    sol_fval = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval)
+    replan_r_fval, _ = mee2rv(*sol_fval.y[:6], mu)
     
-    P_pos_km2, P_vel_kms2, P_mass_kg2 = np.eye(3)*0.01, np.eye(3)*1e-10, np.array([[1e-3]])
-    P_cart = np.block([[P_pos_km2/(DU_km**2), np.zeros((3,4))], [np.zeros((4,3)), np.diag([0,0,0,0])]]) # Simplified
-    state_k = np.hstack([r0, v0, m0_val])
-    shared_samples = np.random.multivariate_normal(state_k, P_cart[:7, :7], size=1000)
-    
-    for level, P_model in P_models.items():
-        print(f"  Level: {level} — propagating MC...")
-        mc_endpoints, all_mc_r = [], []
+    results = []
+    for level, diag_vals in rand_diags.items():
+        print(f"  Simulating uncertainty level: {level}...")
         
-        for s in shared_samples:
-            try:
-                mee = np.hstack([rv2mee(s[:3].reshape(1, 3), s[3:6].reshape(1, 3), mu).flatten(), s[6]])
-                x_input = np.hstack([t_start_replan, mee, np.diag(P_model)])
-                lam = model.predict(pd.DataFrame([x_input], columns=['t', 'p', 'f', 'g', 'h', 'k','L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']))[0]
-                S = np.hstack([mee, lam])
+        P_cart = np.diag(np.concatenate([np.diag(np.eye(3)*0.01/(DU_km**2)), np.diag(np.eye(3)*1e-10/((DU_km/86400)**2)), [1e-3/(4000**2)]]))
+        shared_samples = np.random.multivariate_normal(np.hstack([r0, v0, m0_val]), P_cart, size=1000)
+        
+        mean_initial_mee = np.mean([rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten() for s in shared_samples], axis=0)
+        lam_current = model.predict(pd.DataFrame([np.hstack([t_start_replan, mean_initial_mee, m0_val, diag_vals])], columns=['t','p','f','g','h','k','L','mass','c1','c2','c3','c4','c5','c6','c7']))[0]
+        mc_states_current = [np.hstack([rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten(), s[6], lam_current]) for s in shared_samples]
+
+        history_mc_states = [np.array(mc_states_current)]
+        replan_coords, replan_times = [], []
+        
+        tqdm.write("Step |  Time (TU) | Deviation (km) |  Action")
+        tqdm.write("-" * 50)
+        
+        for i in tqdm(range(len(t_eval) - 1), desc="    -> Propagating"):
+            t_start_step, t_end_step = t_eval[i], t_eval[i+1]
+            
+            # FIXED: Propagate using a clean copy of states to prevent modification issues
+            mc_states_to_propagate = [np.copy(s) for s in mc_states_current]
+            mc_states_next_step = []
+
+            for state in mc_states_to_propagate:
+                sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_step, t_end_step], state, t_eval=[t_end_step])
+                mc_states_next_step.append(sol.y[:, -1])
+            
+            mc_states_current = mc_states_next_step
+            history_mc_states.append(np.array(mc_states_current))
+            
+            current_mc_positions = np.array([mee2rv(*s[:6], mu)[0].flatten() for s in mc_states_current])
+            mean_mc_pos = np.mean(current_mc_positions, axis=0)
+            deviation_km = np.linalg.norm(mean_mc_pos - replan_r_nom[i+1]) * DU_km
+            
+            log_action = "---"
+            if deviation_km > DEVIATION_THRESHOLD_KM:
+                log_action = "REPLAN"
+                if not replan_times: replan_times.append(t_end_step)
                 
-                sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_replan, t_end_replan], S, t_eval=np.linspace(t_start_replan, t_end_replan, 100))
-                r, _ = mee2rv(*sol.y[:6], mu)
-                all_mc_r.append(r)
-                mc_endpoints.append(r[-1])
-            except Exception:
-                continue
+                replan_coords.append(mean_mc_pos)
+                mean_current_mee = np.mean([s[:7] for s in mc_states_current], axis=0)
+                lam_current = model.predict(pd.DataFrame([np.hstack([t_end_step, mean_current_mee, diag_vals])], columns=['t','p','f','g','h','k','L','mass','c1','c2','c3','c4','c5','c6','c7']))[0]
+                
+                # Update the guidance for all samples for the next step
+                for j in range(len(mc_states_current)):
+                    mc_states_current[j][7:] = lam_current
+            
+            tqdm.write(f"{i+1:4d} | {t_end_step:10.2f} | {deviation_km:14.2f} | {log_action}")
 
-        mc_endpoints = np.array(mc_endpoints)
-        mu_mc_endpoints = np.mean(mc_endpoints, axis=0)
-        mc_mean_trajectory_r = np.mean(all_mc_r, axis=0)
+        history_mc_r = [np.array([mee2rv(*s[:6], mu)[0].flatten() for s in states_at_t]) for states_at_t in history_mc_states]
+        mc_mean_r = np.mean(np.array(history_mc_r), axis=1)
         
-        # --- NEW: Calculate and store thrust vectors and distances ---
-        del_t_pred = compute_thrust_direction(mu, F_val, nominal_state_replan_start[:6], model.predict(pd.DataFrame([np.hstack([t_start_replan, nominal_state_replan_start[:7], np.diag(P_model)])], columns=['t', 'p', 'f', 'g', 'h', 'k','L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']))[0])
-        thrust_summary.append({ 'level': level, 'pred_x': del_t_pred[0], 'pred_y': del_t_pred[1], 'pred_z': del_t_pred[2], 'nom_x': del_t_nom_start[0], 'nom_y': del_t_nom_start[1], 'nom_z': del_t_nom_start[2], 'diff_x': del_t_pred[0]-del_t_nom_start[0], 'diff_y': del_t_pred[1]-del_t_nom_start[1], 'diff_z': del_t_pred[2]-del_t_nom_start[2] })
-        distance_summary.append({ 'level': level, 'dist_mc_vs_fnom': np.linalg.norm(mu_mc_endpoints - replan_r_nom[-1]), 'dist_mc_vs_fval': np.linalg.norm(mu_mc_endpoints - replan_r_Fval[-1]), 'dist_fnom_vs_fval': np.linalg.norm(replan_r_nom[-1] - replan_r_Fval[-1]) })
+        thrust_nom = compute_thrust_direction(mu, nominal_state_start[:6], lam_tr[idx_start])
+        thrust_mc_initial = compute_thrust_direction(mu, nominal_state_start[:6], model.predict(pd.DataFrame([np.hstack([t_start_replan, nominal_state_start[:7], diag_vals])], columns=['t','p','f','g','h','k','L','mass','c1','c2','c3','c4','c5','c6','c7']))[0])
 
-        # --- Plotting ---
-        fig = plt.figure(figsize=(6.5, 5.5))
-        ax = fig.add_subplot(111, projection='3d')
-        ax.plot(replan_r_nom[:, 0], replan_r_nom[:, 1], replan_r_nom[:, 2], color='black', lw=2.0, label="Nominal (F_nom)")
-        ax.plot(replan_r_Fval[:, 0], replan_r_Fval[:, 1], replan_r_Fval[:, 2], color='blue', linestyle='-.', lw=2.0, label="Nominal (F_val)")
-        ax.plot(mc_mean_trajectory_r[:, 0], mc_mean_trajectory_r[:, 1], mc_mean_trajectory_r[:, 2], linestyle='--', color='red', lw=1.5, label='MC Mean')
-        ax.scatter(*replan_r_nom[0], color='black', s=20, zorder=5)
-        plot_3sigma_ellipsoid(ax, mu_mc_endpoints, np.cov(mc_endpoints.T), color='gray', alpha=0.25)
+        final_dev_mc_km = np.linalg.norm(mc_mean_r[-1] - replan_r_nom[-1]) * DU_km
+        final_dev_fval_km = np.linalg.norm(replan_r_fval[-1] - replan_r_nom[-1]) * DU_km
         
-        # --- NEW: Enhanced Inset Plot ---
-        inset_ax = fig.add_axes([0.63, 0.73, 0.34, 0.34], projection='3d')
-        inset_ax.scatter(mc_endpoints[:,0], mc_endpoints[:,1], mc_endpoints[:,2], color='0.6', s=5, marker='.', alpha=0.3) # regular x
-        # Plot last 3 steps of trajectories as dashed lines
-        inset_ax.plot(*replan_r_nom[-4:].T, color='black', linestyle='--')
-        inset_ax.plot(*replan_r_Fval[-4:].T, color='blue', linestyle='--')
-        inset_ax.plot(*mc_mean_trajectory_r[-4:].T, color='red', linestyle='--')
-        # Plot endpoints
-        inset_ax.scatter(*replan_r_nom[-1], color='black', s=60, marker='X')
-        inset_ax.scatter(*replan_r_Fval[-1], color='blue', s=60, marker='P') # P for 'Propagated'
-        inset_ax.scatter(*mu_mc_endpoints, color='red', s=60, marker='*')
-        # Adjust zoom
-        all_points = np.vstack([replan_r_nom[-3:], replan_r_Fval[-3:], mc_mean_trajectory_r[-3:]])
-        center = np.mean(all_points, axis=0)
-        radius = np.max(np.linalg.norm(all_points - center, axis=1)) * 1.2
-        inset_ax.set_xlim(center[0]-radius, center[0]+radius); inset_ax.set_ylim(center[1]-radius, center[1]+radius); inset_ax.set_zlim(center[2]-radius, center[2]+radius)
-        inset_ax.set_xticks([]); inset_ax.set_yticks([]); inset_ax.set_zticks([])
-        inset_ax.set_box_aspect([1, 1, 1])
+        final_mc_endpoints = np.array(history_mc_r)[-1]
+        cov_mc = np.cov(final_mc_endpoints.T)
+        eigvals = np.maximum(np.linalg.eigvalsh(cov_mc), 0)
+        volume_km3 = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals)) * (DU_km**3)
+        time_to_first_replan = replan_times[0] if replan_times else np.nan
 
-        ax.set_xlabel("X [DU]"); ax.set_ylabel("Y [DU]"); ax.set_zlabel("Z [DU]")
-        set_axes_equal(ax)
-        from matplotlib.lines import Line2D; from matplotlib.patches import Patch
-        ax.legend(handles=[ Line2D([0], [0], color='black', lw=2.0, label='Nominal (F_nom)'), Line2D([0], [0], color='blue', linestyle='-.', lw=2.0, label='Nominal (F_val)'), Line2D([0], [0], linestyle='--', color='red', lw=1.5, label='MC Mean'), Patch(color='gray', alpha=0.25, label='3σ Ellipsoid (MC)') ], loc='upper left', bbox_to_anchor=(0.03, 1), frameon=True)
-        plt.tight_layout()
-        fname = f"tk_{t_start_replan:.3f}_unc_{level}_{window_type}.pdf"
-        plt.savefig(os.path.join("uncertainty_aware_outputs", fname), bbox_inches='tight', dpi=600)
-        plt.close()
-        print(f"  [Saved] {fname}")
+        results.append({
+            'window': window_type, 'level': level,
+            'thrust_x_Fnom': thrust_nom[0], 'thrust_y_Fnom': thrust_nom[1], 'thrust_z_Fnom': thrust_nom[2],
+            'thrust_x_0.9Fnom': thrust_nom[0], 'thrust_y_0.9Fnom': thrust_nom[1], 'thrust_z_0.9Fnom': thrust_nom[2],
+            'thrust_x_MC_initial': thrust_mc_initial[0], 'thrust_y_MC_initial': thrust_mc_initial[1], 'thrust_z_MC_initial': thrust_mc_initial[2],
+            'pos_dev_0.9Fnom_vs_Fnom_km': final_dev_fval_km,
+            'pos_dev_MC_vs_Fnom_km': final_dev_mc_km,
+            'ellipsoid_volume_km3': volume_km3,
+            'time_to_first_replan_TU': time_to_first_replan
+        })
+        
+        plot_full_replan_trajectory(replan_r_nom, replan_r_fval, mc_mean_r, replan_coords, window_type, level, t_start_replan)
+        
+    return results
 
-    # --- NEW: Save the collected data to files ---
-    pd.DataFrame(thrust_summary).to_csv(os.path.join("uncertainty_aware_outputs", f"thrust_vectors_{window_type}.csv"), index=False)
-    print(f"  [Saved] thrust_vectors_{window_type}.csv")
-    pd.DataFrame(distance_summary).to_excel(os.path.join("uncertainty_aware_outputs", f"endpoint_distances_{window_type}.xlsx"), index=False)
-    print(f"  [Saved] endpoint_distances_{window_type}.xlsx")
+# --- SCRIPT ENTRY POINT ---
 
 def main():
+    """Main execution function to run simulations and save results."""
     try:
         model_max = joblib.load("trained_model_max.pkl")
         model_min = joblib.load("trained_model_min.pkl")
@@ -192,33 +195,36 @@ def main():
         print(f"[ERROR] Could not find model file: {e}. Please run the training script first.")
         return
 
-    data = joblib.load("stride_1440min/bundle_data_1440min.pkl")
-    os.makedirs("uncertainty_aware_outputs", exist_ok=True)
-    
-    width_file_path = "stride_1440min/bundle_segment_widths.txt"
-    if not os.path.exists(width_file_path):
-        print(f"[ERROR] Width file not found: {width_file_path}")
+    try:
+        data = joblib.load("stride_1440min/bundle_data_1440min.pkl")
+        width_file_path = "stride_1440min/bundle_segment_widths.txt"
+        with open(width_file_path) as f: lines = f.readlines()[1:]
+        times_arr = np.array([list(map(float, line.strip().split())) for line in lines])
+        diag_mins, diag_maxs = np.load("diag_mins.npy"), np.load("diag_maxs.npy")
+    except FileNotFoundError as e:
+        print(f"[ERROR] A required data file is missing: {e}. Please ensure all input files are present.")
         return
-
-    with open(width_file_path) as f: lines = f.readlines()[1:]
-    times_arr = np.array([list(map(float, line.strip().split())) for line in lines])
+        
+    os.makedirs("uncertainty_aware_outputs", exist_ok=True)
     time_vals = times_arr[:, 0]
     
     max_idx = int(np.argmax(times_arr[:, 1]))
-    t_start_replan_max, t_end_replan_max = time_vals[max(0, max_idx - 2)], time_vals[max(0, max_idx + 2)]
-
+    t_start_max, t_end_max = time_vals[max(0, max_idx - 1)], time_vals[max_idx]
     min_idx_raw = int(np.argmin(times_arr[:, 1]))
     min_idx = np.argsort(times_arr[:, 1])[1] if min_idx_raw == len(times_arr) - 1 else min_idx_raw
-    t_start_replan_min, t_end_replan_min = time_vals[max(0, min_idx - 2)], time_vals[max(0, max_idx + 2)]
-
-    try:
-        diag_mins, diag_maxs = np.load("diag_mins.npy"), np.load("diag_maxs.npy")
-    except FileNotFoundError as e:
-        print(f"[ERROR] Could not find covariance files: {e}. Please run the training script first.")
-        return
-        
-    run_replanning_simulation(model=model_max, t_start_replan=t_start_replan_max, t_end_replan=t_end_replan_max, window_type='max', data=data, diag_mins=diag_mins, diag_maxs=diag_maxs)
-    run_replanning_simulation(model=model_min, t_start_replan=t_start_replan_min, t_end_replan=t_end_replan_min, window_type='min', data=data, diag_mins=diag_mins, diag_maxs=diag_maxs)
+    t_start_min, t_end_min = time_vals[max(0, min_idx - 1)], time_vals[min_idx]
+    
+    all_results = []
+    all_results.extend(run_replanning_simulation(model_max, t_start_max, t_end_max, 'max', data, diag_mins, diag_maxs))
+    all_results.extend(run_replanning_simulation(model_min, t_start_min, t_end_min, 'min', data, diag_mins, diag_maxs))
+    
+    if all_results:
+        df_results = pd.DataFrame(all_results)
+        output_path = os.path.join("uncertainty_aware_outputs", "comparison_summary.xlsx")
+        df_results.to_excel(output_path, index=False)
+        print(f"\n[SUCCESS] All simulations complete. Consolidated results saved to:\n{output_path}")
+    else:
+        print(f"\n[INFO] Simulations finished, but no data was generated for the report.")
 
 if __name__ == "__main__":
     main()
