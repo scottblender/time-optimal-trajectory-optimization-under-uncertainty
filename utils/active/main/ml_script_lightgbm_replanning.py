@@ -90,7 +90,7 @@ def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, 
     r_nom_hist, v_nom_hist, mass_nom_hist, lam_tr = data["r_tr"], data["v_tr"], data["mass_tr"], data["lam_tr"]
     t_vals = np.asarray(data["backTspan"][::-1])
     DU_km = 696340.0
-    F_val = 0.9 * F_nom
+    F_val = 0.98 * F_nom
     
     rand_diags = {'random1': np.random.uniform(low=diag_mins, high=diag_maxs)}
     
