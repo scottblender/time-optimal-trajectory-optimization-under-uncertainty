@@ -256,9 +256,8 @@ def main():
     t_start_min, t_end_min = time_vals[max(0, min_idx - 1)], time_vals[min_idx]
     
     all_results = []
-    all_results.extend(run_replanning_simulation(model_max, t_start_max, t_end_max, 'max', data, diag_mins, diag_maxs))
     all_results.extend(run_replanning_simulation(model_min, t_start_min, t_end_min, 'min', data, diag_mins, diag_maxs))
-    
+    all_results.extend(run_replanning_simulation(model_max, t_start_max, t_end_max, 'max', data, diag_mins, diag_maxs))
     print("\n[SUCCESS] All simulations complete.")
 
 if __name__ == "__main__":
