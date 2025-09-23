@@ -9,9 +9,13 @@ from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMRegressor
 
+# New imports for trajectory propagation and scoring
+from scipy.integrate import solve_ivp
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 from mee2rv import mee2rv
+from rv2mee import rv2mee
+import odefunc
 
 # === Constants ===
 mu = 27.8996
@@ -142,18 +146,6 @@ df_X_max.columns = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass',
 df_X_max["orig_index"] = np.arange(len(df_X_max))
 group_cols = ['t', 'sigma_idx', 'bundle_idx']
 df_dedup_max = df_X_max.groupby(group_cols, sort=False).tail(1).sort_values("orig_index")
-X_max_cleaned = df_dedup_max.drop(columns=["orig_index"]).to_numpy()
-y_max_cleaned = df_y_max.iloc[df_dedup_max["orig_index"].values].to_numpy()
-print(f"[INFO] Deduplicated MAX rows: from {len(X_full_max)} -> {len(X_max_cleaned)}")
-
-# === Remove appended sigma₀ rows (used only for eval, not training)
-is_sigma0_max = X_max_cleaned[:, -1] == 0
-is_zero_cov_max = np.all(np.isclose(X_max_cleaned[:, 8:15], 0.0, atol=1e-12), axis=1)
-is_appended_sigma0_max = is_sigma0_max & is_zero_cov_max
-print(f"[FILTER] Removing {np.sum(is_appended_sigma0_max)} appended sigma₀ rows from X_full_max...")
-X_max_cleaned = X_max_cleaned[~is_appended_sigma0_max]
-y_max_cleaned = y_max_cleaned[~is_appended_sigma0_max]
-
 
 # --- PROCESSING FOR MIN MODEL ---
 print("\n" + "="*20 + " PROCESSING MIN DATA " + "="*20)
@@ -169,15 +161,123 @@ df_X_min.columns = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass',
 df_X_min["orig_index"] = np.arange(len(df_X_min))
 group_cols = ['t', 'sigma_idx', 'bundle_idx']
 df_dedup_min = df_X_min.groupby(group_cols, sort=False).tail(1).sort_values("orig_index")
-X_min_cleaned = df_dedup_min.drop(columns=["orig_index"]).to_numpy()
-y_min_cleaned = df_y_min.iloc[df_dedup_min["orig_index"].values].to_numpy()
-print(f"[INFO] Deduplicated MIN rows: from {len(X_full_min)} -> {len(X_min_cleaned)}")
+
+
+# ==============================================================================
+# === NEW: NOMINAL TRAJECTORY PROPAGATION AND SCORING ==========================
+# ==============================================================================
+
+print("\n[INFO] Loading nominal trajectory data for scoring...")
+nominal_data_file = "stride_1440min/bundle_data_1440min.pkl"
+nominal_data = joblib.load(nominal_data_file)
+r_tr = nominal_data["r_tr"]
+v_tr = nominal_data["v_tr"]
+mass_tr = nominal_data["mass_tr"]
+lam_tr = nominal_data["lam_tr"]
+backTspan = nominal_data["backTspan"]
+forwardTspan = backTspan[::-1]
+F_nom = nominal_data["F"]
+c_nom = nominal_data["c"]
+m0_nom = nominal_data["m0"]
+g0_nom = nominal_data["g0"]
+
+def get_initial_state(t_start, forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu):
+    """Finds the full 14-element state vector for the nominal trajectory at a given time."""
+    start_idx = np.argmin(np.abs(forwardTspan - t_start))
+    r0, v0 = r_tr[start_idx], v_tr[start_idx]
+    mee0 = rv2mee(r0, v0, mu)
+    m0_prop = mass_tr[start_idx]
+    lam0_prop = lam_tr[start_idx]
+    x0 = np.concatenate([mee0, [m0_prop], lam0_prop])
+    return x0
+
+def propagate_and_get_positions(t_eval_points, x0, mu, F, c, m0, g0):
+    """Propagates the nominal trajectory and returns positions at evaluation times."""
+    t_span = (t_eval_points[0], t_eval_points[-1])
+    sol = solve_ivp(
+        odefunc.odefunc, t_span, x0, args=(mu, F, c, m0, g0),
+        t_eval=sorted(t_eval_points), dense_output=True, method='RK45', rtol=1e-6, atol=1e-9
+    )
+    propagated_mees = sol.y[:6, :].T
+    r_propagated, _ = mee2rv(
+        propagated_mees[:, 0], propagated_mees[:, 1], propagated_mees[:, 2],
+        propagated_mees[:, 3], propagated_mees[:, 4], propagated_mees[:, 5], mu
+    )
+    return {t: r for t, r in zip(sol.t, r_propagated)}
+
+def add_distance_score(df, nominal_pos_lookup, mu):
+    """Calculates distance from nominal, normalizes it to a score, and adds it to the DataFrame."""
+    df['score'] = 0.0
+    unique_times = df['t'].unique()
+    grouped = df.groupby('t')
+    
+    for t in tqdm(unique_times, desc="[INFO] Calculating scores"):
+        time_key = min(nominal_pos_lookup.keys(), key=lambda k: abs(k-t))
+        if abs(time_key - t) > 1e-3: # Check if a close enough time exists
+            print(f"[WARN] Time {t:.4f} not in nominal solution (closest is {time_key:.4f}). Skipping.")
+            continue
+        
+        group_df = grouped.get_group(t)
+        r_nom = nominal_pos_lookup[time_key]
+        
+        mees = group_df[['p', 'f', 'g', 'h', 'k', 'L']].values
+        r_samples, _ = mee2rv(mees[:, 0], mees[:, 1], mees[:, 2],
+                              mees[:, 3], mees[:, 4], mees[:, 5], mu)
+        
+        distances = np.linalg.norm(r_samples - r_nom, axis=1)
+        max_dist = np.max(distances)
+        scores = distances / max_dist if max_dist > 1e-9 else np.zeros_like(distances)
+        df.loc[group_df.index, 'score'] = scores
+        
+    return df
+
+# --- Propagate and Score MAX data ---
+print("\n[INFO] Propagating nominal trajectory for MAX segment training window...")
+t_train_max_unique = np.unique(np.round(df_dedup_max['t'], 6))
+x0_max = get_initial_state(t_train_max_unique[0], forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu)
+nominal_pos_max = propagate_and_get_positions(t_train_max_unique, x0_max, mu, F_nom, c_nom, m0_nom, g0_nom)
+df_dedup_max = add_distance_score(df_dedup_max, nominal_pos_max, mu)
+
+# --- Propagate and Score MIN data ---
+print("\n[INFO] Propagating nominal trajectory for MIN segment training window...")
+t_train_min_unique = np.unique(np.round(df_dedup_min['t'], 6))
+x0_min = get_initial_state(t_train_min_unique[0], forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu)
+nominal_pos_min = propagate_and_get_positions(t_train_min_unique, x0_min, mu, F_nom, c_nom, m0_nom, g0_nom)
+df_dedup_min = add_distance_score(df_dedup_min, nominal_pos_min, mu)
+
+
+# ==============================================================================
+# === REBUILD CLEANED DATASETS WITH NEW SCORE FEATURE ==========================
+# ==============================================================================
+
+# --- Rebuild MAX data ---
+feature_cols = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass',
+                'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7',
+                'score']
+bookkeeping_cols = ['bundle_idx', 'sigma_idx']
+X_max_cleaned = df_dedup_max[feature_cols + bookkeeping_cols].to_numpy()
+y_max_cleaned = df_y_max.iloc[df_dedup_max.index].to_numpy()
+print(f"[INFO] Rebuilt MAX data with score. Shape: {X_max_cleaned.shape}")
 
 # === Remove appended sigma₀ rows (used only for eval, not training)
-is_sigma0_min = X_min_cleaned[:, -1] == 0
+is_sigma0_max = X_max_cleaned[:, -2] == 0 # bundle_idx is second to last
+is_zero_cov_max = np.all(np.isclose(X_max_cleaned[:, 8:15], 0.0, atol=1e-12), axis=1)
+is_appended_sigma0_max = is_sigma0_max & is_zero_cov_max
+print(f"[FILTER] Removing {np.sum(is_appended_sigma0_max)} appended sigma₀ rows from X_max_cleaned...")
+X_max_cleaned = X_max_cleaned[~is_appended_sigma0_max]
+y_max_cleaned = y_max_cleaned[~is_appended_sigma0_max]
+
+
+# --- Rebuild MIN data ---
+X_min_cleaned = df_dedup_min[feature_cols + bookkeeping_cols].to_numpy()
+y_min_cleaned = df_y_min.iloc[df_dedup_min.index].to_numpy()
+print(f"[INFO] Rebuilt MIN data with score. Shape: {X_min_cleaned.shape}")
+
+# === Remove appended sigma₀ rows (used only for eval, not training)
+is_sigma0_min = X_min_cleaned[:, -2] == 0 # bundle_idx is second to last
 is_zero_cov_min = np.all(np.isclose(X_min_cleaned[:, 8:15], 0.0, atol=1e-12), axis=1)
 is_appended_sigma0_min = is_sigma0_min & is_zero_cov_min
-print(f"[FILTER] Removing {np.sum(is_appended_sigma0_min)} appended sigma₀ rows from X_full_min...")
+print(f"[FILTER] Removing {np.sum(is_appended_sigma0_min)} appended sigma₀ rows from X_min_cleaned...")
 X_min_cleaned = X_min_cleaned[~is_appended_sigma0_min]
 y_min_cleaned = y_min_cleaned[~is_appended_sigma0_min]
 
@@ -206,6 +306,19 @@ for name, X_seg in [("segment_max", X_max_eval), ("segment_min", X_min_eval)]:
 
 print("[SUCCESS] Both segment_max and segment_min include all 50 bundles.")
 
+# === Calculate and save feature bounds for clamping ===
+print("\n[INFO] Calculating and saving feature bounds for replanning...")
+combined_training_X = np.vstack([X_max_cleaned, X_min_cleaned])
+
+# Select only the feature columns the model is trained on
+training_features = combined_training_X[:, :-2] 
+
+feature_mins = np.min(training_features, axis=0)
+feature_maxs = np.max(training_features, axis=0)
+
+np.save("feature_mins.npy", feature_mins)
+np.save("feature_maxs.npy", feature_maxs)
+print("[INFO] Saved feature_mins.npy and feature_maxs.npy.")
 
 # === Train models ===
 base_model_params = {
@@ -221,6 +334,7 @@ base_model_params = {
 # --- Train MAX model ---
 print("\n[INFO] Training LightGBM model for MAX segment...")
 model_max = MultiOutputRegressor(LGBMRegressor(**base_model_params))
+# The slice [:, :-2] now correctly selects all features including the new 'score'
 model_max.fit(X_max_cleaned[:,:-2], y_max_cleaned)
 
 # --- Train MIN model ---
