@@ -1,3 +1,5 @@
+# ml_script_lightgbm_train.py
+
 import os
 import glob
 import joblib
@@ -38,25 +40,20 @@ with open("stride_1440min/bundle_segment_widths.txt") as f:
     t_max_neighbors_eval = time_vals[max(0, max_idx - 1): max_idx + 2]
     t_min_neighbors_eval = time_vals[max(0, min_idx - 1): min_idx + 2]
     
-    # --- MODIFICATION START ---
     # Define separate training windows for max and min segments
     t_train_neighbors_max = time_vals[max(0, max_idx - n): max_idx + n + 1]
     t_train_neighbors_min = time_vals[max(0, min_idx - n): min_idx + n + 1]
 
-    print(f"[INFO] Max segment times (for eval): {t_max_neighbors_eval}")
-    print(f"[INFO] Min segment times (for eval): {t_min_neighbors_eval}")
-    print(f"[INFO] Training times for MAX (t_max +/- {n}): {t_train_neighbors_max}")
-    print(f"[INFO] Training times for MIN (t_min +/- {n}): {t_train_neighbors_min}")
-    # --- MODIFICATION END ---
+    # print(f"[INFO] Max segment times (for eval): {t_max_neighbors_eval}")
+    # print(f"[INFO] Min segment times (for eval): {t_min_neighbors_eval}")
+    # print(f"[INFO] Training times for MAX (t_max +/- {n}): {t_train_neighbors_max}")
+    # print(f"[INFO] Training times for MIN (t_min +/- {n}): {t_train_neighbors_min}")
 
 
 # === Init containers ===
 X_eval_max, y_eval_max, X_eval_min, y_eval_min = [], [], [], []
-# --- MODIFICATION START ---
-# Create separate training lists for max and min data
 X_train_max, y_train_max = [], []
 X_train_min, y_train_min = [], []
-# --- MODIFICATION END ---
 Wm, Wc = None, None
 
 start = time.time()
@@ -79,7 +76,6 @@ for file in tqdm(batch_files, desc="[INFO] Loading batches"):
             if len(matches) == 0: continue
             sigmas.append(matches[-1])
         if len(sigmas) != 15:
-            # print(f"[WARN] Skipping covariance check: expected 15, got {len(sigmas)}")
             continue
         r_all = []
         for row in sigmas:
@@ -108,21 +104,17 @@ for file in tqdm(batch_files, desc="[INFO] Loading batches"):
             X_eval_min.append(Xb[idx])
             y_eval_min.append(yb[idx])
     
-    # --- MODIFICATION START ---
-    # Populate the training data for the MAX model
     for t in t_train_neighbors_max:
         idx = np.round(Xb[:, 0], 6) == np.round(t, 6)
         if np.any(idx):
             X_train_max.append(Xb[idx])
             y_train_max.append(yb[idx])
             
-    # Populate the training data for the MIN model
     for t in t_train_neighbors_min:
         idx = np.round(Xb[:, 0], 6) == np.round(t, 6)
         if np.any(idx):
             X_train_min.append(Xb[idx])
             y_train_min.append(yb[idx])
-    # --- MODIFICATION END ---
 
 
 # === Stack the evaluation data
@@ -205,15 +197,23 @@ def propagate_and_get_positions(t_eval_points, x0, mu, F, c, m0, g0):
     )
     return {t: r for t, r in zip(sol.t, r_propagated)}
 
-def add_distance_score(df, nominal_pos_lookup, mu):
-    """Calculates distance from nominal, normalizes it to a score, and adds it to the DataFrame."""
+def add_deviation_features(df, nominal_pos_lookup, mu):
+    """
+    Calculates distance from nominal and the deviation vector components,
+    and adds them as features to the DataFrame.
+    """
+    # Initialize new columns
     df['score'] = 0.0
+    df['delta_r_x'] = 0.0
+    df['delta_r_y'] = 0.0
+    df['delta_r_z'] = 0.0
+    
     unique_times = df['t'].unique()
     grouped = df.groupby('t')
     
-    for t in tqdm(unique_times, desc="[INFO] Calculating scores"):
+    for t in tqdm(unique_times, desc="[INFO] Calculating deviation features"):
         time_key = min(nominal_pos_lookup.keys(), key=lambda k: abs(k-t))
-        if abs(time_key - t) > 1e-3: # Check if a close enough time exists
+        if abs(time_key - t) > 1e-3:
             print(f"[WARN] Time {t:.4f} not in nominal solution (closest is {time_key:.4f}). Skipping.")
             continue
         
@@ -224,10 +224,19 @@ def add_distance_score(df, nominal_pos_lookup, mu):
         r_samples, _ = mee2rv(mees[:, 0], mees[:, 1], mees[:, 2],
                               mees[:, 3], mees[:, 4], mees[:, 5], mu)
         
-        distances = np.linalg.norm(r_samples - r_nom, axis=1)
+        # Calculate the deviation vector and scalar distance
+        delta_r = r_samples - r_nom
+        distances = np.linalg.norm(delta_r, axis=1)
+        
+        # Normalize distance for the 'score' feature
         max_dist = np.max(distances)
         scores = distances / max_dist if max_dist > 1e-9 else np.zeros_like(distances)
+
+        # Update the main DataFrame using the group's index
         df.loc[group_df.index, 'score'] = scores
+        df.loc[group_df.index, 'delta_r_x'] = delta_r[:, 0]
+        df.loc[group_df.index, 'delta_r_y'] = delta_r[:, 1]
+        df.loc[group_df.index, 'delta_r_z'] = delta_r[:, 2]
         
     return df
 
@@ -236,14 +245,14 @@ print("\n[INFO] Propagating nominal trajectory for MAX segment training window..
 t_train_max_unique = np.unique(np.round(df_dedup_max['t'], 6))
 x0_max = get_initial_state(t_train_max_unique[0], forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu)
 nominal_pos_max = propagate_and_get_positions(t_train_max_unique, x0_max, mu, F_nom, c_nom, m0_nom, g0_nom)
-df_dedup_max = add_distance_score(df_dedup_max, nominal_pos_max, mu)
+df_dedup_max = add_deviation_features(df_dedup_max, nominal_pos_max, mu)
 
 # --- Propagate and Score MIN data ---
 print("\n[INFO] Propagating nominal trajectory for MIN segment training window...")
 t_train_min_unique = np.unique(np.round(df_dedup_min['t'], 6))
 x0_min = get_initial_state(t_train_min_unique[0], forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu)
 nominal_pos_min = propagate_and_get_positions(t_train_min_unique, x0_min, mu, F_nom, c_nom, m0_nom, g0_nom)
-df_dedup_min = add_distance_score(df_dedup_min, nominal_pos_min, mu)
+df_dedup_min = add_deviation_features(df_dedup_min, nominal_pos_min, mu)
 
 
 # ==============================================================================
@@ -251,9 +260,9 @@ df_dedup_min = add_distance_score(df_dedup_min, nominal_pos_min, mu)
 # ==============================================================================
 
 # --- Rebuild MAX data ---
-feature_cols = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass',
+feature_cols = ['t', 'p', 'f', 'g', 'h', 'k', 'L', 'mass',
                 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7',
-                'score']
+                'score', 'delta_r_x', 'delta_r_y', 'delta_r_z']
 bookkeeping_cols = ['bundle_idx', 'sigma_idx']
 X_max_cleaned = df_dedup_max[feature_cols + bookkeeping_cols].to_numpy()
 y_max_cleaned = df_y_max.iloc[df_dedup_max.index].to_numpy()
@@ -349,7 +358,7 @@ joblib.dump(model_min, "trained_model_min.pkl")
 joblib.dump(Wm, "Wm.pkl")
 joblib.dump(Wc, "Wc.pkl")
 joblib.dump({"X": X_max_eval, "y": y_max_eval}, "segment_max.pkl")
-joblib.dump({"X": X_min_eval, "y": y_min_eval}, "segment_min.pkl")
+joblib.dump({"X": X_min_eval, "y": y_eval_min}, "segment_min.pkl")
 
 print("\n[INFO] Models and segment data saved.")
 print(f"[INFO] Elapsed time: {time.time() - start:.2f} sec")

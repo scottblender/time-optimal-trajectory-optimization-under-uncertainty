@@ -1,3 +1,5 @@
+# ml_script_lightgbm_replanning.py
+
 import os
 import warnings
 import joblib
@@ -47,8 +49,8 @@ def compute_thrust_direction(mu, mee, lam):
     norm = np.linalg.norm(mat)
     return mat.flatten() / norm if norm > 0 else np.full(3, np.nan)
 
-def plot_full_replan_trajectory(r_nom, r_fval, r_mc_mean, replan_coords, replan_thrusts, window_type, level, t_start):
-    """Plots full X-Y trajectories and marks replanning events with control quivers."""
+def plot_full_replan_trajectory(r_nom, r_fval, r_mc_mean, initial_quiver, first_replan_quiver, window_type, level, t_start):
+    """Plots full X-Y trajectories and marks specific control events with quivers."""
     fig, ax = plt.subplots(figsize=(10, 8))
     
     ax.plot(r_nom[:, 0], r_nom[:, 1], color='0.0', linestyle='-', linewidth=1.5, label='Nominal (F_nom)', alpha=0.6)
@@ -58,16 +60,20 @@ def plot_full_replan_trajectory(r_nom, r_fval, r_mc_mean, replan_coords, replan_
     ax.scatter(r_nom[0, 0], r_nom[0, 1], c='0.2', marker='o', s=100, alpha=0.7, label='Start', zorder=5)
     ax.scatter(r_nom[-1, 0], r_nom[-1, 1], c='0.0', marker='X', s=120, alpha=0.7, label='Nominal End', zorder=5)
     
-    if replan_coords:
-        replan_arr = np.array(replan_coords)
-        thrust_arr = np.array(replan_thrusts)
-        ax.quiver(replan_arr[:, 0], replan_arr[:, 1], thrust_arr[:, 0], thrust_arr[:, 1], 
-                  color='magenta', alpha=0.9, scale=15, width=0.008, label='Replanning Control')
+    if initial_quiver:
+        pos, thrust = initial_quiver
+        ax.quiver(pos[0], pos[1], thrust[0], thrust[1], 
+                  color='blue', alpha=0.9, scale=15, width=0.008, label='Initial Control')
+
+    if first_replan_quiver:
+        pos, thrust = first_replan_quiver
+        ax.quiver(pos[0], pos[1], thrust[0], thrust[1], 
+                  color='magenta', alpha=0.9, scale=15, width=0.008, label='First Replan Control')
 
     ax.set_xlabel('X [DU]'); ax.set_ylabel('Y [DU]')
     ax.grid(True, linestyle=':')
     
-    ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
+    ax.legend(loc='upper right')
     
     x_min, x_max = np.min(r_nom[:, 0]), np.max(r_nom[:, 0])
     y_min, y_max = np.min(r_nom[:, 1]), np.max(r_nom[:, 1])
@@ -86,7 +92,7 @@ def plot_full_replan_trajectory(r_nom, r_fval, r_mc_mean, replan_coords, replan_
     inset_ax.set_title("Final Timesteps", fontsize=9)
     inset_ax.grid(True, linestyle=':')
 
-    fig.tight_layout(rect=[0, 0, 0.85, 1])
+    fig.tight_layout()
     fname = f"full_replan_trajectory_{t_start:.3f}_{level}_{window_type}.pdf"
     plt.savefig(os.path.join("uncertainty_aware_outputs", fname))
     plt.close()
@@ -118,8 +124,8 @@ def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, 
     replan_r_nom, _ = mee2rv(*sol_nom.y[:6], mu)
     sol_fval = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval)
     
-    # UPDATE: Reverted to a single score feature
-    feature_cols = ['t','p','f','g','h','k','L','mass','c1','c2','c3','c4','c5','c6','c7', 'score']
+    feature_cols = ['t','p','f','g','h','k','L','mass','c1','c2','c3','c4','c5','c6','c7',
+                    'score', 'delta_r_x', 'delta_r_y', 'delta_r_z']
 
     results = []
     for level, diag_vals in rand_diags.items():
@@ -135,20 +141,31 @@ def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, 
             mee_s = rv2mee(r_s, v_s, mu)
             state_s = np.hstack([mee_s, m_s])
             
-            # UPDATE: Calculate only the position score
-            score_s = np.linalg.norm(r_s - r0) # Raw position deviation in DU
-            
-            features_unclamped = np.hstack([t_start_replan, state_s, diag_vals, score_s])
+            # Calculate score AND deviation vector
+            delta_r_s = r_s - r0
+            score_s = np.linalg.norm(delta_r_s)
+
+            features_unclamped = np.hstack([t_start_replan, state_s, diag_vals, score_s, delta_r_s])
             features = np.clip(features_unclamped, feature_mins, feature_maxs)
-            
             lam_s = model.predict(pd.DataFrame([features], columns=feature_cols))[0]
             mc_states_current.append(np.hstack([state_s, lam_s]))
 
         history_mc_states = [np.array(mc_states_current)]
-        replan_coords, replan_times, replan_thrusts = [], [], []
         
-        is_in_correction_maneuver = False
+        initial_quiver_data = None
+        first_replan_quiver_data = None
         
+        mean_initial_mee = np.mean([s[:7] for s in mc_states_current], axis=0)
+        mean_initial_r, _ = mee2rv(*mean_initial_mee[:6], mu)
+        mean_initial_delta_r = mean_initial_r - r0
+        mean_initial_score = np.linalg.norm(mean_initial_delta_r)
+        
+        mean_initial_features_unclamped = np.hstack([t_start_replan, mean_initial_mee, diag_vals, mean_initial_score, mean_initial_delta_r])
+        mean_initial_features = np.clip(mean_initial_features_unclamped, feature_mins, feature_maxs)
+        mean_initial_lam = model.predict(pd.DataFrame([mean_initial_features], columns=feature_cols))[0]
+        initial_thrust_vector = compute_thrust_direction(mu, mean_initial_mee[:6], mean_initial_lam)
+        initial_quiver_data = (r0[:2], initial_thrust_vector[:2])
+
         tqdm.write("Step |  Time (TU) | Deviation (km) | Ellipsoid Vol (km^3) | Action")
         tqdm.write("-" * 70)
         
@@ -173,40 +190,37 @@ def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, 
             eigvals = np.maximum(np.linalg.eigvalsh(cov_mc), 0)
             volume_km3 = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals)) * (DU_km**3)
             
-            if deviation_km > DEVIATION_THRESHOLD_KM and not is_in_correction_maneuver:
+            if deviation_km > DEVIATION_THRESHOLD_KM:
                 log_action = "REPLAN"
-                is_in_correction_maneuver = True
-                if not replan_times: replan_times.append(t_end_step)
-                replan_coords.append(mean_mc_pos)
-                
-                mee_nom_current = sol_nom.y[:6, i+1]
-                r_nom_current, _ = mee2rv(*mee_nom_current, mu)
 
-                # For plotting, calculate the thrust for the mean state
-                mean_current_mee = np.mean([s[:7] for s in mc_states_current], axis=0)
-                mean_r, _ = mee2rv(*mean_current_mee[:6], mu)
-                mean_score = np.linalg.norm(mean_r - r_nom_current)
-                mean_features_unclamped = np.hstack([t_end_step, mean_current_mee, diag_vals, mean_score])
-                mean_features = np.clip(mean_features_unclamped, feature_mins, feature_maxs)
-                mean_lam = model.predict(pd.DataFrame([mean_features], columns=feature_cols))[0]
-                replan_thrusts.append(compute_thrust_direction(mu, mean_current_mee[:6], mean_lam))
+                if first_replan_quiver_data is None:
+                    mee_nom_current = sol_nom.y[:6, i+1]
+                    r_nom_current, _ = mee2rv(*mee_nom_current, mu)
+                    mean_current_mee = np.mean([s[:7] for s in mc_states_current], axis=0)
+                    mean_r, _ = mee2rv(*mean_current_mee[:6], mu)
+                    
+                    mean_delta_r = mean_r - r_nom_current
+                    mean_score = np.linalg.norm(mean_delta_r)
+                    
+                    mean_features_unclamped = np.hstack([t_end_step, mean_current_mee, diag_vals, mean_score, mean_delta_r])
+                    mean_features = np.clip(mean_features_unclamped, feature_mins, feature_maxs)
+                    mean_lam = model.predict(pd.DataFrame([mean_features], columns=feature_cols))[0]
+                    replan_thrust_vector = compute_thrust_direction(mu, mean_current_mee[:6], mean_lam)
+                    first_replan_quiver_data = (mean_mc_pos[:2], replan_thrust_vector[:2])
 
-                # Predict for each sample individually
                 for j in range(len(mc_states_current)):
                     sample_state = mc_states_current[j][:7]
                     r_sample, _ = mee2rv(*sample_state[:6], mu)
-                    
-                    sample_score = np.linalg.norm(r_sample - r_nom_current)
-                    
-                    sample_features_unclamped = np.hstack([t_end_step, sample_state, diag_vals, sample_score])
+                    mee_nom_current = sol_nom.y[:6, i+1]
+                    r_nom_current, _ = mee2rv(*mee_nom_current, mu)
+
+                    sample_delta_r = r_sample - r_nom_current
+                    sample_score = np.linalg.norm(sample_delta_r)
+
+                    sample_features_unclamped = np.hstack([t_end_step, sample_state, diag_vals, sample_score, sample_delta_r])
                     sample_features = np.clip(sample_features_unclamped, feature_mins, feature_maxs)
-                    
                     predicted_lam = model.predict(pd.DataFrame([sample_features], columns=feature_cols))[0]
                     mc_states_current[j][7:] = predicted_lam
-
-            elif is_in_correction_maneuver and deviation_km < (0.5 * DEVIATION_THRESHOLD_KM):
-                log_action = "CORRECTION COMPLETE"
-                is_in_correction_maneuver = False
             else:
                 log_action = "---"
 
@@ -217,7 +231,7 @@ def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, 
         
         final_dev_mc_km = np.linalg.norm(mc_mean_r[-1] - replan_r_nom[-1]) * DU_km
         
-        plot_full_replan_trajectory(replan_r_nom, sol_fval.y[:3].T, mc_mean_r, replan_coords, replan_thrusts, window_type, level, t_start_replan)
+        plot_full_replan_trajectory(replan_r_nom, sol_fval.y[:3].T, mc_mean_r, initial_quiver_data, first_replan_quiver_data, window_type, level, t_start_replan)
         
     return []
 
