@@ -32,15 +32,12 @@ with open("stride_1440min/bundle_segment_widths.txt") as f:
     time_vals = times_arr[:, 0]
 
     max_idx = int(np.argmax(times_arr[:, 1]))
-    min_idx = int(np.argmin(times_arr[:, 1])) - 1
-    if min_idx == len(times_arr) - 1:
-        sorted_indices = np.argsort(times_arr[:, 1])
-        min_idx = sorted_indices[1]
+    min_idx_raw = int(np.argmin(times_arr[:, 1]))
+    min_idx = np.argsort(times_arr[:, 1])[1] if min_idx_raw == len(times_arr) - 1 else min_idx_raw
     n = 50
     t_max_neighbors_eval = time_vals[max(0, max_idx - 1): max_idx + 2]
     t_min_neighbors_eval = time_vals[max(0, min_idx - 1): min_idx + 2]
     
-    # Define separate training windows for max and min segments
     t_train_neighbors_max = time_vals[max(0, max_idx - n): max_idx + n + 1]
     t_train_neighbors_min = time_vals[max(0, min_idx - n): min_idx + n + 1]
 
@@ -102,9 +99,20 @@ df_dedup_min = df_X_min.groupby(group_cols, sort=False).tail(1).sort_values("ori
 y_min_dedup = df_y_min.iloc[df_dedup_min.index].to_numpy()
 
 # ==============================================================================
-# === NEW: NOMINAL TRAJECTORY PROPAGATION AND SCORING ==========================
+# === CALCULATE AND SAVE MIN/MAX DIAGONAL VALUES ===============================
 # ==============================================================================
-print("\n[INFO] Loading nominal trajectory data for scoring...")
+print("\n[INFO] Calculating and saving min/max diagonal values for replanning script...")
+diag_cols = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
+all_diags_df = pd.concat([df_X_max[diag_cols], df_X_min[diag_cols]])
+diag_mins = all_diags_df.min().to_numpy()
+diag_maxs = all_diags_df.max().to_numpy()
+np.save("diag_mins.npy", diag_mins)
+np.save("diag_maxs.npy", diag_maxs)
+print(f"[INFO] Saved diag_mins.npy and diag_maxs.npy")
+
+# ==============================================================================
+# === NOMINAL TRAJECTORY PROPAGATION AND FEATURE ENGINEERING ===================
+# ==============================================================================
 nominal_data = joblib.load("stride_1440min/bundle_data_1440min.pkl")
 r_tr, v_tr, mass_tr, lam_tr = nominal_data["r_tr"], nominal_data["v_tr"], nominal_data["mass_tr"], nominal_data["lam_tr"]
 forwardTspan = nominal_data["backTspan"][::-1]
@@ -127,32 +135,44 @@ def propagate_and_get_nominal_state(t_eval_points, x0, mu, F, c, m0, g0):
     r_propagated, v_propagated = mee2rv(*propagated_mees.T, mu)
     return {t: (r, v) for t, r, v in zip(sol.t, r_propagated, v_propagated)}
 
-def add_weighted_error_feature(df, nominal_state_lookup, mu):
-    # --- Tunable Weights ---
-    # alpha prioritizes position error, beta prioritizes velocity error.
-    alpha = 1.0
-    beta = 0.1
+def add_engineered_features(df, nominal_state_lookup, mu):
+    new_cols = ['pos_error_score', 'vel_error_score', 'energy_error_score']
+    for col in new_cols:
+        df[col] = 0.0
     
-    df['weighted_error'] = 0.0
+    # Add a small epsilon to prevent division by zero
+    epsilon = 1e-9
+
     unique_times = df['t'].unique()
     grouped = df.groupby('t')
     
-    for t in tqdm(unique_times, desc="[INFO] Calculating weighted error feature"):
+    for t in tqdm(unique_times, desc="[INFO] Engineering features"):
         time_key = min(nominal_state_lookup.keys(), key=lambda k: abs(k-t))
         group_df = grouped.get_group(t)
+        group_indices = group_df.index
+        
         r_nom, v_nom = nominal_state_lookup[time_key]
         
         mees = group_df[['p', 'f', 'g', 'h', 'k', 'L']].values
         r_samples, v_samples = mee2rv(*mees.T, mu)
         
-        delta_r = r_samples - r_nom
-        delta_v = v_samples - v_nom
+        # MODIFIED: Calculate all error scores using the (A-B)/(A+B) formula
+        # For vectors, this applies to their magnitudes (norms)
         
-        dr_norm_sq = np.sum(delta_r**2, axis=1)
-        dv_norm_sq = np.sum(delta_v**2, axis=1)
-        
-        weighted_error = (alpha * dr_norm_sq) + (beta * dv_norm_sq)
-        df.loc[group_df.index, 'weighted_error'] = weighted_error
+        # Position Score
+        norm_r_samples = np.linalg.norm(r_samples, axis=1)
+        norm_r_nom = np.linalg.norm(r_nom)
+        df.loc[group_indices, 'pos_error_score'] = (norm_r_samples - norm_r_nom) / (norm_r_samples + norm_r_nom + epsilon)
+
+        # Velocity Score
+        norm_v_samples = np.linalg.norm(v_samples, axis=1)
+        norm_v_nom = np.linalg.norm(v_nom)
+        df.loc[group_indices, 'vel_error_score'] = (norm_v_samples - norm_v_nom) / (norm_v_samples + norm_v_nom + epsilon)
+
+        # Energy Score
+        E_nom = 0.5 * np.dot(v_nom, v_nom) - mu / norm_r_nom
+        E_samples = 0.5 * np.sum(v_samples**2, axis=1) - mu / norm_r_samples
+        df.loc[group_indices, 'energy_error_score'] = (E_samples - E_nom) / (E_samples + E_nom + epsilon)
         
     return df
 
@@ -161,21 +181,21 @@ print("\n[INFO] Propagating nominal trajectory for MAX segment training window..
 t_train_max_unique = np.unique(np.round(df_dedup_max['t'], 6))
 x0_max = get_initial_state(t_train_max_unique[0], forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu)
 nominal_state_max = propagate_and_get_nominal_state(t_train_max_unique, x0_max, mu, F_nom, c_nom, m0_nom, g0_nom)
-df_dedup_max = add_weighted_error_feature(df_dedup_max, nominal_state_max, mu)
+df_dedup_max = add_engineered_features(df_dedup_max, nominal_state_max, mu)
 
 # --- Propagate and Score MIN data ---
 print("\n[INFO] Propagating nominal trajectory for MIN segment training window...")
 t_train_min_unique = np.unique(np.round(df_dedup_min['t'], 6))
 x0_min = get_initial_state(t_train_min_unique[0], forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu)
 nominal_state_min = propagate_and_get_nominal_state(t_train_min_unique, x0_min, mu, F_nom, c_nom, m0_nom, g0_nom)
-df_dedup_min = add_weighted_error_feature(df_dedup_min, nominal_state_min, mu)
+df_dedup_min = add_engineered_features(df_dedup_min, nominal_state_min, mu)
 
 # ==============================================================================
 # === REBUILD CLEANED DATASETS =================================================
 # ==============================================================================
 feature_cols = ['t', 'p', 'f', 'g', 'h', 'k', 'L', 'mass',
                 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7',
-                'weighted_error']
+                'pos_error_score', 'vel_error_score', 'energy_error_score']
 bookkeeping_cols = ['bundle_idx', 'sigma_idx']
 
 # --- Rebuild MAX data ---
@@ -210,6 +230,12 @@ model_max.fit(X_max_final[:,:-2], y_max_final)
 print("\n[INFO] Training LightGBM model for MIN segment...")
 model_min = MultiOutputRegressor(LGBMRegressor(**base_model_params))
 model_min.fit(X_min_final[:,:-2], y_min_final)
+
+# === Final Validation Step ====
+print("\n[INFO] Validating data shapes before saving...")
+assert X_max_eval.shape[0] == y_max_eval.shape[0], f"X_max_eval and y_max_eval have mismatched row counts: {X_max_eval.shape[0]} vs {y_max_eval.shape[0]}"
+assert X_min_eval.shape[0] == y_min_eval.shape[0], f"X_min_eval and y_min_eval have mismatched row counts: {X_min_eval.shape[0]} vs {y_min_eval.shape[0]}"
+print("[INFO] All evaluation data shapes are consistent.")
 
 # === Save everything ===
 joblib.dump(model_max, "trained_model_max.pkl")

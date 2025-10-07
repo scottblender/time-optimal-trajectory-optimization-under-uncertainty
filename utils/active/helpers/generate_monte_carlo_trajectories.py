@@ -1,216 +1,224 @@
-import os
-import warnings
-import joblib
 import numpy as np
-import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from tqdm import tqdm
+from multiprocessing import Pool, Manager, Process
+import traceback
 
-warnings.filterwarnings("ignore", category=UserWarning)
-os.environ['LGBM_LOGLEVEL'] = '2'
-
-import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
-from mee2rv import mee2rv
 from rv2mee import rv2mee
+from mee2rv import mee2rv
 from odefunc import odefunc
 
-# --- ANALYSIS CONSTANT ---
-DEVIATION_THRESHOLD_KM = 100.0
+def sample_within_bounds(mean, cov, max_tries=100):
+    for _ in range(max_tries):
+        sample = np.random.multivariate_normal(mean, cov)
+        z = np.abs(sample - mean) / np.sqrt(np.diag(cov))
+        if np.all(z <= 3):
+            return sample
+    return mean
 
-# --- HELPER & PLOTTING FUNCTIONS ---
+def listener(q, total):
+    with tqdm(total=total, desc="Monte Carlo progress") as pbar:
+        completed = 0
+        while completed < total:
+            msg = q.get()
+            if isinstance(msg, int) and msg > 0:
+                pbar.update(msg)
+                completed += msg
+            elif msg == -1:
+                completed += 1
+                pbar.write("[WARN] Subprocess failed")
 
-def compute_thrust_direction(mu, mee, lam):
-    """Computes the optimal thrust direction vector from costates."""
-    p, f, g, h, k, L = mee
-    lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = lam[:-1]
-    lam_matrix = np.array([[lam_p, lam_f, lam_g, lam_h, lam_k, lam_L]]).T
-    SinL, CosL = np.sin(L), np.cos(L)
-    w = 1 + f * CosL + g * SinL
-    if np.isclose(w, 0, atol=1e-10): return np.full(3, np.nan)
-    s = 1 + h**2 + k**2
-    C1 = np.sqrt(p / mu)
-    C2 = 1 / w
-    C3 = h * SinL - k * CosL
-    A = np.array([
-        [0, 2 * p * C2 * C1, 0],
-        [C1 * SinL, C1 * C2 * ((w + 1) * CosL + f), -C1 * (g / w) * C3],
-        [-C1 * CosL, C1 * C2 * ((w + 1) * SinL + g), C1 * (f / w) * C3],
-        [0, 0, C1 * s * CosL * C2 / 2],
-        [0, 0, C1 * s * SinL * C2 / 2],
-        [0, 0, C1 * C2 * C3]
+def _solve_mc_single_bundle(args):
+    (bundle_idx_global, time_steps, num_time_steps, sigmas_combined, new_lam_bundles,
+     mu, F, c, m0, g0, num_samples, P_init, P_control, backTspan, queue, bundle_idx_local) = args
+
+    try:
+        forwardTspan = backTspan[::-1]
+        time = forwardTspan[time_steps]
+        substeps = 10
+        evals_per_substep = 20
+        steps_per_segment = substeps * evals_per_substep
+        num_segments = num_time_steps - 1
+        total_steps = num_samples * steps_per_segment * num_segments
+
+        X_rows = np.zeros((total_steps, 7))
+        y_rows = np.zeros((total_steps, 7))
+        cov_rows = np.zeros((total_steps, 7))
+        t_rows = np.zeros((total_steps,))
+        b_rows = np.full((total_steps,), bundle_idx_global)
+        s_rows = np.zeros((total_steps,))
+
+        P_combined_history = []
+        means_history = []
+        trajectories = []
+
+        row_idx = 0
+
+        for j in range(num_segments):
+            tstart, tend = time[j], time[j + 1]
+            sigma_state = sigmas_combined[bundle_idx_local, 0, :, j]
+            lam_nominal = new_lam_bundles[time_steps[j], :, bundle_idx_local]
+            sub_times = np.linspace(tstart, tend, substeps + 1)
+            cartesian_samples = []
+
+            for sample_idx in range(num_samples):
+                sample_state = sigma_state if sample_idx == 0 else sample_within_bounds(sigma_state, P_init)
+                r0, v0, mass = sample_state[:3], sample_state[3:6], sample_state[6]
+                mee = rv2mee(np.array([r0]), np.array([v0]), mu).flatten()
+                S = np.concatenate([mee, [mass], lam_nominal])
+
+                full_states = []
+                time_vals = []
+
+                prev_lam_mean = lam_nominal
+                for k in range(substeps):
+                    if k == 0:
+                        lam = prev_lam_mean
+                    else:
+                        lam = sample_within_bounds(prev_lam_mean, P_control)
+                    prev_lam_mean = lam.copy()
+                    S[-7:] = lam
+                    t0, t1 = sub_times[k], sub_times[k + 1]
+                    t_eval = np.linspace(t0, t1, evals_per_substep)
+                    func = lambda t, x: odefunc(t, x, mu, F, c, m0, g0)
+                    sol = solve_ivp(func, [t0, t1], S, t_eval=t_eval, rtol=1e-6, atol=1e-8)
+
+                    if sol.success:
+                        full_states.append(sol.y.T)
+                        time_vals.append(sol.t)
+                        S = sol.y[:, -1]
+                        if queue is not None:
+                            queue.put(len(sol.t))
+
+                if not full_states:
+                    continue
+
+                full_states = np.vstack(full_states)
+                t_eval = np.hstack(time_vals)
+                mee_state = full_states[:, :7]
+                ctrl_state = full_states[:, -7:]
+
+                r_eval, v_eval = mee2rv(mee_state[:, 0], mee_state[:, 1], mee_state[:, 2],
+                                        mee_state[:, 3], mee_state[:, 4], mee_state[:, 5], mu)
+                cartesian = np.hstack((r_eval, v_eval, mee_state[:, 6:7]))
+
+                cartesian_samples.append(cartesian)
+                trajectories.append(cartesian)
+
+                N = len(t_eval)
+                X_rows[row_idx:row_idx+N] = mee_state
+                y_rows[row_idx:row_idx+N] = ctrl_state
+                t_rows[row_idx:row_idx+N] = t_eval
+                s_rows[row_idx:row_idx+N] = sample_idx
+                row_idx += N
+
+            cartesian_samples = np.array(cartesian_samples)
+            mean_cartesian = np.mean(cartesian_samples, axis=0)
+            deviations = cartesian_samples - mean_cartesian[np.newaxis, :, :]
+            P_combined = np.einsum("ijk,ijl->jkl", deviations, deviations) / num_samples
+            P_diag = np.array([np.diag(np.diag(P)) for P in P_combined])
+
+            for t in range(P_diag.shape[0]):
+                if row_idx - P_diag.shape[0] + t < total_steps:
+                    cov_rows[row_idx - P_diag.shape[0] + t] = np.diag(P_diag[t])
+
+            P_combined_history.append(P_diag)
+            means_history.append(mean_cartesian)
+
+        return (
+            np.array(trajectories).reshape(num_segments, num_samples, -1, 7),
+            P_combined_history, means_history,
+            X_rows[:row_idx], y_rows[:row_idx],
+            cov_rows[:row_idx], t_rows[:row_idx],
+            b_rows[:row_idx], s_rows[:row_idx]
+        )
+
+    except Exception:
+        if queue is not None:
+            queue.put(-1)
+        traceback.print_exc()
+        return None
+
+def generate_monte_carlo_trajectories_parallel(
+    backTspan, time_steps, num_time_steps,
+    sigmas_combined, new_lam_bundles, mu, F, c, m0, g0,
+    global_bundle_indices, num_samples=1000, num_workers=4
+):
+    DU_km = 696340.0  # Sun radius in km
+    g0_s = 9.81/1000
+    TU = np.sqrt(DU_km / g0_s)
+    VU_kms = DU_km / TU # Convert m/s to km/s using g0
+
+    # Set desired physical covariances (e.g., 0.1 km², 1e-4 (km/s)², 1 kg²)
+    P_pos_km2 = np.eye(3) * 0.01        # km²
+    P_vel_kms2 = np.eye(3) * 1e-10      # (km/s)²
+    P_mass_kg2 = np.array([[1e-3]])     # kg²
+
+    # Convert to non-dimensional units for input
+    P_pos = P_pos_km2 / (DU_km**2)
+    P_vel = P_vel_kms2 / (VU_kms**2)
+    P_mass = P_mass_kg2 / (4000**2)
+    P_init = np.block([
+        [P_pos, np.zeros((3, 3)), np.zeros((3, 1))],
+        [np.zeros((3, 3)), P_vel, np.zeros((3, 1))],
+        [np.zeros((1, 3)), np.zeros((1, 3)), P_mass]
     ])
-    mat = A.T @ lam_matrix
-    norm = np.linalg.norm(mat)
-    return mat.flatten() / norm if norm > 0 else np.full(3, np.nan)
+    P_control = np.eye(7) * 1e-16
 
-def plot_full_replan_trajectory(r_nom, r_fval, r_mc_mean, replan_coords, window_type, level, t_start):
-    """Plots the full X-Y trajectories and marks replanning events in grayscale with alpha adjustments."""
-    plt.figure(figsize=(10, 8))
-    
-    plt.plot(r_nom[:, 0], r_nom[:, 1], color='0.0', linestyle='-', linewidth=1.5, label='Nominal (F_nom)')
-    plt.plot(r_fval[:, 0], r_fval[:, 1], color='0.5', linestyle='--', linewidth=1.2, label='Nominal (0.9*F_nom)')
-    plt.plot(r_mc_mean[:, 0], r_mc_mean[:, 1], color='0.2', linestyle=':', linewidth=1.5, label='MC Mean (Closed-Loop)')
-    
-    plt.scatter(r_nom[0, 0], r_nom[0, 1], c='0.2', marker='o', s=100, alpha=0.7, label='Start', zorder=5)
-    plt.scatter(r_nom[-1, 0], r_nom[-1, 1], c='0.0', marker='X', s=120, alpha=0.8, label='Nominal End', zorder=5)
-    
-    if replan_coords:
-        replan_arr = np.array(replan_coords)
-        plt.scatter(replan_arr[:, 0], replan_arr[:, 1], c='0.0', marker='*', s=180, alpha=0.6, label='Replanning Event', zorder=5)
+    substeps = 10
+    evals_per_substep = 20
+    total = len(global_bundle_indices) * (num_time_steps - 1) * num_samples * substeps * evals_per_substep
 
-    plt.xlabel('X [DU]'); plt.ylabel('Y [DU]')
-    plt.legend(); plt.grid(True, linestyle=':'); plt.axis('equal'); plt.tight_layout()
-    fname = f"full_replan_trajectory_{t_start:.3f}_{level}_{window_type}.pdf"
-    plt.savefig(os.path.join("uncertainty_aware_outputs", fname))
-    plt.close()
-    print(f"  [Saved Plot] {fname}")
+    manager = Manager()
+    q = manager.Queue()
+    listener_process = Process(target=listener, args=(q, total))
+    listener_process.start()
 
-# --- MAIN SIMULATION FUNCTION (CLOSED-LOOP WITH BUG FIX) ---
+    args_list = [
+        (global_idx, time_steps, num_time_steps, sigmas_combined, new_lam_bundles,
+         mu, F, c, m0, g0, num_samples, P_init, P_control, backTspan, q, local_idx)
+        for local_idx, global_idx in enumerate(global_bundle_indices)
+    ]
 
-def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, data, diag_mins, diag_maxs):
-    """Runs a closed-loop Monte Carlo simulation and returns summary data."""
-    print(f"\n--- Running Closed-Loop Sim for {window_type.upper()} WINDOW ---")
-    
-    mu, F_nom, c, m0, g0 = data["mu"], data["F"], data["c"], data["m0"], data["g0"]
-    r_nom_hist, v_nom_hist, mass_nom_hist, lam_tr = data["r_tr"], data["v_tr"], data["mass_tr"], data["lam_tr"]
-    t_vals = np.asarray(data["backTspan"][::-1])
-    DU_km = 696340.0
-    F_val = 0.9 * F_nom
-    
-    rand_diags = {'random1': np.random.uniform(low=diag_mins, high=diag_maxs)}
-    
-    idx_start = np.argmin(np.abs(t_vals - t_start_replan))
-    r0, v0, m0_val = r_nom_hist[idx_start], v_nom_hist[idx_start], mass_nom_hist[idx_start]
-    
-    t_eval = np.linspace(t_start_replan, t_end_replan, 100)
-    nominal_state_start = np.hstack([rv2mee(r0.reshape(1,3), v0.reshape(1,3), mu).flatten(), m0_val, lam_tr[idx_start]])
-    sol_nom = solve_ivp(lambda t, x: odefunc(t, x, mu, F_nom, c, m0, g0), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval)
-    replan_r_nom, _ = mee2rv(*sol_nom.y[:6], mu)
-    sol_fval = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval)
-    replan_r_fval, _ = mee2rv(*sol_fval.y[:6], mu)
-    
-    results = []
-    for level, diag_vals in rand_diags.items():
-        print(f"  Simulating uncertainty level: {level}...")
-        
-        P_cart = np.diag(np.concatenate([np.diag(np.eye(3)*0.01/(DU_km**2)), np.diag(np.eye(3)*1e-10/((DU_km/86400)**2)), [1e-3/(4000**2)]]))
-        shared_samples = np.random.multivariate_normal(np.hstack([r0, v0, m0_val]), P_cart, size=1000)
-        
-        # Initial guidance prediction
-        mean_initial_mee = np.mean([rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten() for s in shared_samples], axis=0)
-        lam_current = model.predict(pd.DataFrame([np.hstack([t_start_replan, mean_initial_mee, m0_val, diag_vals])], columns=['t','p','f','g','h','k','L','mass','c1','c2','c3','c4','c5','c6','c7']))[0]
+    with Pool(num_workers) as pool:
+        results = pool.map(_solve_mc_single_bundle, args_list)
 
-        # FIXED: Initialize the full 13-element state (mee+mass+costates) for each sample
-        mc_states_current = [np.hstack([rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten(), s[6], lam_current]) for s in shared_samples]
+    listener_process.join()
 
-        history_mc_states = [np.array(mc_states_current)]
-        replan_coords = []; replan_times = []
-        
-        for i in tqdm(range(len(t_eval) - 1), desc="    -> Propagating Step-by-Step"):
-            t_start_step, t_end_step = t_eval[i], t_eval[i+1]
-            mc_states_next_step = []
-            
-            for state in mc_states_current:
-                sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_step, t_end_step], state, t_eval=[t_end_step])
-                # FIXED: Keep the ENTIRE propagated state (mee+mass+costates), not just the first 7 elements
-                mc_states_next_step.append(sol.y[:, -1])
-            
-            mc_states_current = mc_states_next_step
-            history_mc_states.append(np.array(mc_states_current))
-            
-            current_mc_positions = np.array([mee2rv(*s[:6], mu)[0].flatten() for s in mc_states_current])
-            mean_mc_pos = np.mean(current_mc_positions, axis=0)
-            deviation_km = np.linalg.norm(mean_mc_pos - replan_r_nom[i+1]) * DU_km
-            
-            if deviation_km > DEVIATION_THRESHOLD_KM:
-                if not replan_times: replan_times.append(t_end_step)
-                print(f"\n    [REPLANNING] Threshold breached at t={t_end_step:.2f} TU. Predicting new guidance.")
-                replan_coords.append(mean_mc_pos)
-                mean_current_mee = np.mean([s[:7] for s in mc_states_current], axis=0)
-                lam_current = model.predict(pd.DataFrame([np.hstack([t_end_step, mean_current_mee, diag_vals])], columns=['t','p','f','g','h','k','L','mass','c1','c2','c3','c4','c5','c6','c7']))[0]
-                # Update the guidance for all samples for the next step
-                for j in range(len(mc_states_current)):
-                    mc_states_current[j][7:] = lam_current
+    trajectories, P_hist, means_hist = [], [], []
+    X_rows, y_rows, cov_rows, time_rows, b_rows, s_rows = [], [], [], [], [], []
 
-        # Convert history to position history for plotting and analysis
-        history_mc_r = []
-        for states_at_t in history_mc_states:
-            positions_at_t = np.array([mee2rv(*s[:6], mu)[0].flatten() for s in states_at_t])
-            history_mc_r.append(positions_at_t)
-        mc_mean_r = np.mean(np.array(history_mc_r), axis=1)
-        
-        thrust_nom = compute_thrust_direction(mu, nominal_state_start[:6], lam_tr[idx_start])
-        thrust_mc_initial = compute_thrust_direction(mu, nominal_state_start[:6], model.predict(pd.DataFrame([np.hstack([t_start_replan, nominal_state_start[:7], diag_vals])], columns=['t','p','f','g','h','k','L','mass','c1','c2','c3','c4','c5','c6','c7']))[0])
+    for res in results:
+        if res is None:
+            continue
+        traj, P, M, X, y, cov, t, b, s = res
+        trajectories.append(traj)
+        P_hist.append(P)
+        means_hist.append(M)
+        X_rows.append(X)
+        y_rows.append(y)
+        cov_rows.append(cov)
+        time_rows.append(t)
+        b_rows.append(b)
+        s_rows.append(s)
 
-        final_dev_mc_km = np.linalg.norm(mc_mean_r[-1] - replan_r_nom[-1]) * DU_km
-        final_dev_fval_km = np.linalg.norm(replan_r_fval[-1] - replan_r_nom[-1]) * DU_km
-        
-        final_mc_endpoints = np.array(history_mc_r)[-1]
-        cov_mc = np.cov(final_mc_endpoints.T)
-        eigvals = np.maximum(np.linalg.eigvalsh(cov_mc), 0)
-        volume_km3 = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals)) * (DU_km**3)
-        time_to_first_replan = replan_times[0] if replan_times else np.nan
+    X = np.hstack((
+        np.concatenate(time_rows).reshape(-1, 1),
+        np.concatenate(X_rows),
+        np.concatenate(cov_rows),
+        np.concatenate(b_rows).reshape(-1, 1),
+        np.concatenate(s_rows).reshape(-1, 1)
+    ))
+    y = np.concatenate(y_rows)
 
-        results.append({
-            'window': window_type, 'level': level,
-            'thrust_x_Fnom': thrust_nom[0], 'thrust_y_Fnom': thrust_nom[1], 'thrust_z_Fnom': thrust_nom[2],
-            'thrust_x_0.9Fnom': thrust_nom[0], 'thrust_y_0.9Fnom': thrust_nom[1], 'thrust_z_0.9Fnom': thrust_nom[2],
-            'thrust_x_MC_initial': thrust_mc_initial[0], 'thrust_y_MC_initial': thrust_mc_initial[1], 'thrust_z_MC_initial': thrust_mc_initial[2],
-            'pos_dev_0.9Fnom_vs_Fnom_km': final_dev_fval_km,
-            'pos_dev_MC_vs_Fnom_km': final_dev_mc_km,
-            'ellipsoid_volume_km3': volume_km3,
-            'time_to_first_replan_TU': time_to_first_replan
-        })
-        
-        plot_full_replan_trajectory(replan_r_nom, replan_r_fval, mc_mean_r, replan_coords, window_type, level, t_start_replan)
-        
-    return results
+    sort_indices = np.lexsort((X[:, 0], X[:, -1], X[:, -2]))
+    X_sorted = X[sort_indices]
+    y_sorted = y[sort_indices]
 
-# --- SCRIPT ENTRY POINT ---
-
-def main():
-    """Main execution function to run simulations and save results."""
-    try:
-        model_max = joblib.load("trained_model_max.pkl")
-        model_min = joblib.load("trained_model_min.pkl")
-    except FileNotFoundError as e:
-        print(f"[ERROR] Could not find model file: {e}. Please run the training script first.")
-        return
-
-    try:
-        data = joblib.load("stride_1440min/bundle_data_1440min.pkl")
-        width_file_path = "stride_1440min/bundle_segment_widths.txt"
-        with open(width_file_path) as f: lines = f.readlines()[1:]
-        times_arr = np.array([list(map(float, line.strip().split())) for line in lines])
-        diag_mins, diag_maxs = np.load("diag_mins.npy"), np.load("diag_maxs.npy")
-    except FileNotFoundError as e:
-        print(f"[ERROR] A required data file is missing: {e}. Please ensure all input files are present.")
-        return
-        
-    os.makedirs("uncertainty_aware_outputs", exist_ok=True)
-    time_vals = times_arr[:, 0]
-    
-    max_idx = int(np.argmax(times_arr[:, 1]))
-    t_start_max, t_end_max = time_vals[max(0, max_idx - 1)], time_vals[max_idx]
-    min_idx_raw = int(np.argmin(times_arr[:, 1]))
-    min_idx = np.argsort(times_arr[:, 1])[1] if min_idx_raw == len(times_arr) - 1 else min_idx_raw
-    t_start_min, t_end_min = time_vals[max(0, min_idx - 1)], time_vals[min_idx]
-    
-    all_results = []
-    all_results.extend(run_replanning_simulation(model_max, t_start_max, t_end_max, 'max', data, diag_mins, diag_maxs))
-    all_results.extend(run_replanning_simulation(model_min, t_start_min, t_end_min, 'min', data, diag_mins, diag_maxs))
-    
-    if all_results:
-        df_results = pd.DataFrame(all_results)
-        output_path = os.path.join("uncertainty_aware_outputs", "comparison_summary.xlsx")
-        df_results.to_excel(output_path, index=False)
-        print(f"\n[SUCCESS] All simulations complete. Consolidated results saved to:\n{output_path}")
-    else:
-        print(f"\n[INFO] Simulations finished, but no data was generated for the report.")
-
-if __name__ == "__main__":
-    main()
+    return (
+        np.array(trajectories),
+        np.array(P_hist),
+        np.array(means_hist),
+        X_sorted,
+        y_sorted
+    )
