@@ -23,50 +23,88 @@ from filterpy.kalman import MerweScaledSigmaPoints
 
 # --- ANALYSIS CONSTANT ---
 DEVIATION_THRESHOLD_KM = 100.0
-CONTROL_SMOOTHING_ALPHA = 1.0
 
-# --- NEW: PLOTTING FUNCTION FOR CONTROL PROFILES ---
-def plot_control_profiles(t_eval, history_mc_states, sol_nom, window_type, level, t_start):
+# --- HELPER AND PLOTTING FUNCTIONS FOR THRUST VECTOR ---
+def compute_thrust_direction(mu, F, mee, lam):
     """
-    Plots the mean predicted costate profiles against the nominal costate profiles.
+    Computes the optimal thrust direction vector from MEE state and costates.
+    NOTE: Assumes 'mee' and 'lam' are 7-element vectors (MEE + mass).
     """
-    # Extract the mean costates from the simulation history
-    # The costates are the last 7 elements of the state vector (index 7 onwards)
-    mean_costates_history = np.array([np.mean(states_at_t[:, 7:], axis=0) for states_at_t in history_mc_states])
+    p, f, g, h, k, L = mee[:-1]
+    lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = lam[:-1]
+
+    lam_matrix = np.array([[lam_p, lam_f, lam_g, lam_h, lam_k, lam_L]]).T
+    SinL, CosL = np.sin(L), np.cos(L)
+    w = 1 + f * CosL + g * SinL
+
+    if np.isclose(w, 0, atol=1e-10):
+        return np.full(3, np.nan)  # degenerate case
+
+    s = 1 + h**2 + k**2
+    C1 = np.sqrt(p / mu)
+    C2 = 1 / w
+    C3 = h * SinL - k * CosL
+
+    A = np.array([
+        [0, 2 * p * C2 * C1, 0],
+        [C1 * SinL, C1 * C2 * ((w + 1) * CosL + f), -C1 * (g / w) * C3],
+        [-C1 * CosL, C1 * C2 * ((w + 1) * SinL + g), C1 * (f / w) * C3],
+        [0, 0, C1 * s * CosL * C2 / 2],
+        [0, 0, C1 * s * SinL * C2 / 2],
+        [0, 0, C1 * C2 * C3]
+    ])
+    mat = A.T @ lam_matrix
+    norm = np.linalg.norm(mat)
+    return (mat.flatten() / norm) if norm > 1e-9 else np.zeros(3)
+
+def plot_thrust_profiles(t_eval, history_mc_states, sol_nom, mu, F_nom, window_type, level, t_start):
+    """
+    Plots the mean closed-loop thrust vector components against the nominal profiles.
+    """
+    # Calculate thrust history for the closed-loop (mean) trajectory
+    thrust_history_closed_loop = []
+    for states_at_t in history_mc_states:
+        mean_state = np.mean(states_at_t, axis=0)
+        mean_mee_mass = mean_state[:7]
+        mean_lam = mean_state[7:]
+        thrust_vector = compute_thrust_direction(mu, F_nom, mean_mee_mass, mean_lam)
+        thrust_history_closed_loop.append(thrust_vector)
+    thrust_history_closed_loop = np.array(thrust_history_closed_loop)
     
-    # Extract the nominal costates from the nominal solution
-    # The nominal costates are rows 7 to 13 of the solution object's state vector
-    nominal_costates_history = sol_nom.y[7:, :].T
+    # Calculate thrust history for the nominal trajectory
+    thrust_history_nominal = []
+    for i in range(len(t_eval)):
+        nominal_mee_mass = sol_nom.y[:7, i]
+        nominal_lam = sol_nom.y[7:, i]
+        thrust_vector = compute_thrust_direction(mu, F_nom, nominal_mee_mass, nominal_lam)
+        thrust_history_nominal.append(thrust_vector)
+    thrust_history_nominal = np.array(thrust_history_nominal)
 
-    fig, axes = plt.subplots(4, 2, figsize=(15, 20))
-    fig.suptitle(f'Control Costate Profiles ({window_type.upper()} Window)', fontsize=16)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 15))
+    fig.suptitle(f'Thrust Control Vector Profiles ({window_type.upper()} Window)', fontsize=16)
     axes = axes.flatten()
+    labels = ['$u_x$', '$u_y$', '$u_z$']
 
-    for i in range(7):
+    for i in range(3):
         ax = axes[i]
-        ax.plot(t_eval, nominal_costates_history[:, i], color='black', linestyle='-', label='Nominal Control')
-        ax.plot(t_eval, mean_costates_history[:, i], color='red', linestyle='--', label='Mean Closed-Loop Control')
-        ax.set_title(f'Costate $λ_{i+1}$ Profile')
+        ax.plot(t_eval, thrust_history_nominal[:, i], color='black', linestyle='-', label='Nominal Thrust')
+        ax.plot(t_eval, thrust_history_closed_loop[:, i], color='red', linestyle='--', label='Mean Closed-Loop Thrust')
+        ax.set_title(f'Thrust Component {labels[i]}')
         ax.set_xlabel('Time [TU]')
-        ax.set_ylabel('Costate Value')
+        ax.set_ylabel('Thrust Component Value')
         ax.grid(True, linestyle=':')
         ax.legend()
 
-    # Hide any unused subplots
-    if len(axes) > 7:
-        for i in range(7, len(axes)):
-            fig.delaxes(axes[i])
-
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-    fname = f"control_profiles_{t_start:.3f}_{level}_{window_type}.pdf"
+    fname = f"thrust_profiles_{t_start:.3f}_{level}_{window_type}.pdf"
     plt.savefig(os.path.join("uncertainty_aware_outputs", fname))
     plt.close()
     print(f"\n  [Saved Plot] {fname}")
 
 
 # --- MAIN SIMULATION FUNCTION ---
-def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, data):
-    # ... (simulation setup code is unchanged) ...
+def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, data, diag_mins, diag_maxs):
+    # ... (setup is the same) ...
     print(f"\n--- Running Closed-Loop Sim for {window_type.upper()} WINDOW ---")
     
     mu, F_nom, c, m0, g0 = data["mu"], data["F"], data["c"], data["m0"], data["g0"]
@@ -87,28 +125,23 @@ def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, 
 
     P_cart = np.diag(np.concatenate([np.diag(np.eye(3)*0.01/(DU_km**2)), np.diag(np.eye(3)*1e-10/((DU_km/86400)**2)), [1e-3/(4000**2)]]))
     
-    print("\n[INFO] Generating initial sigma points for simulation...")
-    mean_state_cart = np.hstack([r0, v0, m0_val])
-    nsd = len(mean_state_cart)
-    sigma_points_generator = MerweScaledSigmaPoints(n=nsd, alpha=1e-3, beta=2., kappa=3-nsd)
-    cartesian_samples = sigma_points_generator.sigma_points(mean_state_cart, P_cart)
-    print(f"[INFO] Propagating {len(cartesian_samples)} sigma points.")
+    print("\n[INFO] Generating Monte Carlo samples for simulation...")
+    num_samples = 50
+    cartesian_samples = np.random.multivariate_normal(np.hstack([r0, v0, m0_val]), P_cart, size=num_samples)
+    print(f"[INFO] Propagating {num_samples} Monte Carlo samples.")
     
     epsilon = 1e-9
     
-    mc_states_current = []
-    for s in cartesian_samples:
-        r_s, v_s, m_s = s[:3], s[3:6], s[6]
-        state_s = np.hstack([rv2mee(r_s.reshape(1,3), v_s.reshape(1,3), mu).flatten(), m_s])
-        mc_states_current.append(state_s)
-    mc_states_current = np.array(mc_states_current)
-
-    P_mee_initial = np.cov(mc_states_current, rowvar=False)
+    initial_mee_states = np.array([np.hstack([rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten(), s[6]]) for s in cartesian_samples])
+    
+    mean_mee_initial = np.mean(initial_mee_states, axis=0)
+    devs_initial = initial_mee_states - mean_mee_initial
+    P_mee_initial = np.einsum('ji,jk->ik', devs_initial, devs_initial) / (num_samples - 1)
     diag_vals_initial = np.diag(P_mee_initial)
 
-    temp_states_with_costates = []
-    for j in tqdm(range(len(mc_states_current)), desc="  -> Initializing samples"):
-        state_s = mc_states_current[j]
+    mc_states_current = []
+    for j in tqdm(range(len(initial_mee_states)), desc="  -> Initializing samples"):
+        state_s = initial_mee_states[j]
         r_s, v_s = mee2rv(*state_s[:6], mu)
 
         norm_r_s, norm_r0 = np.linalg.norm(r_s), np.linalg.norm(r0)
@@ -121,23 +154,29 @@ def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, 
         
         features = np.hstack([t_start_replan, state_s, diag_vals_initial, pos_error, vel_error, energy_error])
         lam_s = model.predict(pd.DataFrame([features], columns=feature_cols))[0]
-        
-        temp_states_with_costates.append(np.hstack([state_s, lam_s]))
-    mc_states_current = np.array(temp_states_with_costates)
-
-    history_mc_states = [np.array(mc_states_current)]
+        mc_states_current.append(np.hstack([state_s, lam_s]))
     
-    tqdm.write("Step |  Time (TU) | Deviation (km) | Action")
-    tqdm.write("-" * 50)
+    mc_states_current = np.array(mc_states_current)
+    history_mc_states = [mc_states_current]
+    
+    tqdm.write("Step |  Time (TU) | Deviation (km) | Ellipsoid Vol (km^3) | Action")
+    tqdm.write("-" * 70)
     
     for i in tqdm(range(len(t_eval) - 1), desc="    -> Propagating"):
-        # ... (propagation and replanning logic is unchanged) ...
+        # ... (propagation and replanning logic is the same) ...
         t_start_step, t_end_step = t_eval[i], t_eval[i+1]
         
-        states_at_next_step = [solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_step, t_end_step], s, t_eval=[t_end_step]).y[:, -1] for s in mc_states_current]
-        mc_states_current = np.array(states_at_next_step)
+        next_states_list = []
+        for s in mc_states_current:
+            sol = solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_step, t_end_step], s, t_eval=[t_end_step])
+            next_states_list.append(sol.y[:, -1])
         
-        P_mee_current = np.cov(mc_states_current[:, :7], rowvar=False)
+        mc_states_current = np.array(next_states_list)
+        
+        mee_states_current = mc_states_current[:, :7]
+        mean_mee_current = np.mean(mee_states_current, axis=0)
+        devs_current = mee_states_current - mean_mee_current
+        P_mee_current = np.einsum('ji,jk->ik', devs_current, devs_current) / (num_samples - 1)
         diag_vals_current = np.diag(P_mee_current)
 
         current_mc_positions = np.array([mee2rv(*s[:6], mu)[0] for s in mc_states_current])
@@ -148,6 +187,10 @@ def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, 
         
         deviation_km = np.linalg.norm(mean_mc_pos - r_nom_current) * DU_km
         log_action = "---"
+        
+        cov_cartesian = np.cov(current_mc_positions.T)
+        eigvals = np.maximum(np.linalg.eigvalsh(cov_cartesian), 0)
+        volume_km3 = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals)) * (DU_km**3)
         
         if deviation_km > DEVIATION_THRESHOLD_KM:
             log_action = "REPLAN"
@@ -166,15 +209,13 @@ def run_replanning_simulation(model, t_start_replan, t_end_replan, window_type, 
                 features = np.hstack([t_end_step, sample_state, diag_vals_current, pos_error, vel_error, energy_error])
                 predicted_lam = model.predict(pd.DataFrame([features], columns=feature_cols))[0]
                 
-                old_lam = mc_states_current[j][7:]
-                smoothed_lam = CONTROL_SMOOTHING_ALPHA * predicted_lam + (1 - CONTROL_SMOOTHING_ALPHA) * old_lam
-                mc_states_current[j][7:] = smoothed_lam
+                mc_states_current[j][7:] = predicted_lam
         
-        history_mc_states.append(np.array(mc_states_current))
-        tqdm.write(f"{i+1:4d} | {t_end_step:10.2f} | {deviation_km:14.2f} | {log_action}")
+        history_mc_states.append(mc_states_current)
+        tqdm.write(f"{i+1:4d} | {t_end_step:10.2f} | {deviation_km:14.2f} | {volume_km3:20.2e} | {log_action}")
     
-    # MODIFIED: Call the new plotting function
-    plot_control_profiles(t_eval, history_mc_states, sol_nom, window_type, "random1", t_start_replan)
+    # MODIFIED: Call the new thrust plotting function
+    plot_thrust_profiles(t_eval, history_mc_states, sol_nom, mu, F_nom, window_type, "random1", t_start_replan)
 
 # --- SCRIPT ENTRY POINT ---
 def main():
@@ -183,6 +224,8 @@ def main():
         model_max = joblib.load("trained_model_max.pkl")
         model_min = joblib.load("trained_model_min.pkl")
         data = joblib.load("stride_1440min/bundle_data_1440min.pkl")
+        diag_mins = np.load("diag_mins.npy")
+        diag_maxs = np.load("diag_maxs.npy")
         width_file_path = "stride_1440min/bundle_segment_widths.txt"
         with open(width_file_path) as f: lines = f.readlines()[1:]
         times_arr = np.array([list(map(float, line.strip().split())) for line in lines])
@@ -196,8 +239,9 @@ def main():
     min_idx_raw = int(np.argmin(times_arr[:, 1])); min_idx = np.argsort(times_arr[:, 1])[1] if min_idx_raw == len(times_arr) - 1 else min_idx_raw
     t_start_min, t_end_min = time_vals[max(0, min_idx - 1)], time_vals[min_idx]
     
-    run_replanning_simulation(model_max, t_start_max, t_end_max, 'max', data)
-    run_replanning_simulation(model_min, t_start_min, t_end_min, 'min', data)
+    run_replanning_simulation(model_min, t_start_min, t_end_min, 'min', data, diag_mins, diag_maxs)
+    run_replanning_simulation(model_max, t_start_max, t_end_max, 'max', data, diag_mins, diag_maxs)
+    
     
     print("\n[SUCCESS] All simulations complete.")
 

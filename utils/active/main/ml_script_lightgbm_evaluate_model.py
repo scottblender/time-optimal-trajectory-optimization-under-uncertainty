@@ -48,6 +48,57 @@ def inspect_file(filepath):
 # ==============================================================================
 # === HELPER FUNCTIONS =========================================================
 # ==============================================================================
+
+# === NEW HELPER FUNCTION (VECTORIZED) ===
+def compute_thrust_direction_vectorized(mu, mee_array, lam_array):
+    """
+    Computes optimal thrust direction vectors from arrays of MEE states and costates.
+    
+    Args:
+        mu (float): Gravitational parameter.
+        mee_array (np.ndarray): Array of shape (n_samples, 7) containing MEEs + mass.
+        lam_array (np.ndarray): Array of shape (n_samples, 7) containing costates.
+
+    Returns:
+        np.ndarray: Array of shape (n_samples, 3) with the computed thrust vectors.
+    """
+    p, f, g, h, k, L = [mee_array[:, i] for i in range(6)]
+    lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = [lam_array[:, i] for i in range(6)]
+
+    lam_matrix = np.stack([lam_p, lam_f, lam_g, lam_h, lam_k, lam_L], axis=1)
+    
+    SinL, CosL = np.sin(L), np.cos(L)
+    w = 1 + f * CosL + g * SinL
+    
+    is_degenerate = np.isclose(w, 0, atol=1e-10)
+    
+    s = 1 + h**2 + k**2
+    C1 = np.sqrt(p / mu)
+    C2 = 1 / w
+    C3 = h * SinL - k * CosL
+
+    A = np.zeros((mee_array.shape[0], 6, 3))
+    A[:, 0, 1] = 2 * p * C2 * C1
+    A[:, 1, 0] = C1 * SinL
+    A[:, 1, 1] = C1 * C2 * ((w + 1) * CosL + f)
+    A[:, 1, 2] = -C1 * (g / w) * C3
+    A[:, 2, 0] = -C1 * CosL
+    A[:, 2, 1] = C1 * C2 * ((w + 1) * SinL + g)
+    A[:, 2, 2] = C1 * (f / w) * C3
+    A[:, 3, 2] = C1 * s * CosL * C2 / 2
+    A[:, 4, 2] = C1 * s * SinL * C2 / 2
+    A[:, 5, 2] = C1 * C2 * C3
+    
+    mat = np.einsum('nij,nj->ni', A.transpose(0, 2, 1), lam_matrix)
+    norm = np.linalg.norm(mat, axis=1, keepdims=True)
+    
+    u_vecs = np.zeros_like(mat)
+    non_zero_norm_mask = norm.flatten() > 1e-9
+    u_vecs[non_zero_norm_mask] = mat[non_zero_norm_mask] / norm[non_zero_norm_mask]
+    u_vecs[is_degenerate] = np.nan
+    
+    return u_vecs
+
 def get_initial_state(t_start, forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu):
     start_idx = np.argmin(np.abs(forwardTspan - t_start))
     r0, v0 = r_tr[start_idx], v_tr[start_idx]
@@ -117,7 +168,6 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
     X_eval_raw = data["X"]
     y_true_raw = data["y"]
     
-    # --- ROBUST DE-DUPLICATION PIPELINE ---
     x_cols = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'bundle_idx', 'sigma_idx']
     y_cols = [f'y_{i}' for i in range(y_true_raw.shape[1])]
     
@@ -138,7 +188,6 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
     y_true = df_dedup_combined[y_cols].to_numpy()
     print(f"[INFO] Data de-duplicated. Samples: {len(y_true)}.")
 
-    # --- FEATURE ENGINEERING ---
     mu = nominal_data_bundle["mu"]
     r_tr, v_tr, mass_tr, lam_tr = nominal_data_bundle["r_tr"], nominal_data_bundle["v_tr"], nominal_data_bundle["mass_tr"], nominal_data_bundle["lam_tr"]
     forwardTspan = nominal_data_bundle["backTspan"][::-1]
@@ -154,21 +203,19 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
                     'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7',
                     'pos_error_score', 'vel_error_score', 'energy_error_score']
 
-    # MODIFIED: Keep the features as a DataFrame to preserve names
     X_features_df = df_eval_featured[feature_cols]
 
-    # --- PREDICTION AND METRICS ---
     print("[INFO] Making predictions on the evaluation set...")
-    # MODIFIED: Pass the DataFrame to the predict method
     y_pred = model.predict(X_features_df)
     print("[INFO] Predictions complete.")
 
+    # --- ORIGINAL: COSTATE PERFORMANCE METRICS ---
     r2_per_output = r2_score(y_true, y_pred, multioutput='raw_values')
     r2_avg = np.mean(r2_per_output)
     rmse_per_output = np.sqrt(mean_squared_error(y_true, y_pred, multioutput='raw_values'))
     rmse_avg = np.mean(rmse_per_output)
 
-    print("\n--- Performance Metrics ---")
+    print("\n--- Costate Performance Metrics ---")
     print(f"Overall Average R² Score: {r2_avg:.4f}")
     print(f"Overall Average RMSE:     {rmse_avg:.4f}")
     
@@ -176,14 +223,42 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
     for i in range(len(r2_per_output)):
         print(f"  Costate λ_{i+1}: R² = {r2_per_output[i]:.4f}, RMSE = {rmse_per_output[i]:.4f}")
 
-    # --- PLOTTING ---
-    print("\n[INFO] Generating plot...")
-    fig, axes = plt.subplots(3, 3, figsize=(15, 15))
-    fig.suptitle(f'Prediction vs. Actual Values for {model_name}', fontsize=16)
-    axes = axes.flatten()
+    # === NEW: THRUST VECTOR EVALUATION ===
+    print("\n[INFO] Calculating thrust vectors from true and predicted costates...")
+    mee_cols = ['p', 'f', 'g', 'h', 'k', 'L', 'mass']
+    mee_and_mass_array = X_features_df[mee_cols].to_numpy()
+
+    u_true = compute_thrust_direction_vectorized(mu, mee_and_mass_array, y_true)
+    u_pred = compute_thrust_direction_vectorized(mu, mee_and_mass_array, y_pred)
+    
+    valid_mask = ~np.isnan(u_true).any(axis=1) & ~np.isnan(u_pred).any(axis=1)
+    u_true_valid = u_true[valid_mask]
+    u_pred_valid = u_pred[valid_mask]
+    
+    if len(u_true_valid) > 0:
+        print(f"[INFO] Evaluating thrust on {len(u_true_valid)} non-degenerate samples.")
+        
+        thrust_r2 = r2_score(u_true_valid, u_pred_valid, multioutput='raw_values')
+        thrust_rmse = np.sqrt(mean_squared_error(u_true_valid, u_pred_valid, multioutput='raw_values'))
+
+        print("\n--- Thrust Vector Performance Metrics ---")
+        print(f"Overall Average R² Score: {np.mean(thrust_r2):.4f}")
+        print(f"Overall Average RMSE:     {np.mean(thrust_rmse):.4f}")
+        
+        print("\n--- Per-Component Metrics ---")
+        for i, component in enumerate(['u_x', 'u_y', 'u_z']):
+            print(f"  Component {component}: R² = {thrust_r2[i]:.4f}, RMSE = {thrust_rmse[i]:.4f}")
+    else:
+        print("[WARNING] No valid (non-degenerate) thrust vectors could be computed.")
+
+    # --- PLOTTING: COSTATES ---
+    print("\n[INFO] Generating costate plot...")
+    fig_costate, axes_costate = plt.subplots(3, 3, figsize=(15, 15))
+    fig_costate.suptitle(f'Costate Prediction vs. Actual for {model_name}', fontsize=16)
+    axes_costate = axes_costate.flatten()
 
     for i in range(y_true.shape[1]):
-        ax = axes[i]
+        ax = axes_costate[i]
         ax.scatter(y_true[:, i], y_pred[:, i], alpha=0.2, s=10)
         lims = [np.min([ax.get_xlim(), ax.get_ylim()]), np.max([ax.get_xlim(), ax.get_ylim()])]
         ax.plot(lims, lims, 'r--', alpha=0.75, zorder=0, label='Perfect Prediction')
@@ -191,17 +266,42 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
         ax.set_xlabel('True Values')
         ax.set_ylabel('Predicted Values')
         ax.grid(True, linestyle=':')
+    
+    for i in range(y_true.shape[1], len(axes_costate)):
+        fig_costate.delaxes(axes_costate[i])
+    
+    fig_costate.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plot_filename_costate = f"costate_evaluation_{model_name}.png"
+    plt.savefig(plot_filename_costate)
+    print(f"[INFO] Costate plot saved to {plot_filename_costate}")
+    plt.close(fig_costate)
 
-    for i in range(y_true.shape[1], len(axes)):
-        fig.delaxes(axes[i])
 
-    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plot_filename = f"evaluation_plot_{model_name}.png"
-    plt.savefig(plot_filename)
-    print(f"[INFO] Plot saved to {plot_filename}")
+    # --- NEW PLOTTING: THRUST VECTORS ---
+    if len(u_true_valid) > 0:
+        print("[INFO] Generating thrust vector plot...")
+        fig_thrust, axes_thrust = plt.subplots(1, 3, figsize=(18, 5))
+        fig_thrust.suptitle(f'Thrust Vector Prediction vs. Actual for {model_name}', fontsize=16)
+        
+        for i, component in enumerate(['u_x', 'u_y', 'u_z']):
+            ax = axes_thrust[i]
+            ax.scatter(u_true_valid[:, i], u_pred_valid[:, i], alpha=0.2, s=10)
+            lims = [np.min([ax.get_xlim(), ax.get_ylim()]), np.max([ax.get_xlim(), ax.get_ylim()])]
+            ax.plot(lims, lims, 'r--', alpha=0.75, zorder=0, label='Perfect Prediction')
+            ax.set_title(f'Thrust Component {component} (R² = {thrust_r2[i]:.3f})')
+            ax.set_xlabel('True Values')
+            ax.set_ylabel('Predicted Values')
+            ax.grid(True, linestyle=':')
+            ax.set_aspect('equal', 'box')
+            
+        fig_thrust.tight_layout(rect=[0, 0.03, 1, 0.93])
+        plot_filename_thrust = f"thrust_evaluation_{model_name}.png"
+        plt.savefig(plot_filename_thrust)
+        print(f"[INFO] Thrust plot saved to {plot_filename_thrust}")
+        plt.close(fig_thrust)
+
 
 if __name__ == '__main__':
-    # === DIAGNOSTIC CHECK RUNS FIRST ===
     print("--- RUNNING DIAGNOSTIC CHECK ON SAVED DATA FILES ---")
     inspect_file("segment_max.pkl")
     inspect_file("segment_min.pkl")
