@@ -168,6 +168,12 @@ def evaluate_segment(X, y, model, label, bundle_idx):
         "kl_pred_vs_actual": compute_kl_divergence(mu_pred, cov_pred, mu_act, cov_act),
         "mahal_pred_mean": maha_pred,
         "mahal_actual_mean": maha_act,
+        "del_t_pred_x": del_t_pred[0],
+        "del_t_pred_y": del_t_pred[1],
+        "del_t_pred_z": del_t_pred[2],
+        "del_t_true_x": del_t_true[0],
+        "del_t_true_y": del_t_true[1],
+        "del_t_true_z": del_t_true[2],
         "control_angle_deg": control_angle_deg,
     }
 
