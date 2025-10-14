@@ -1,4 +1,4 @@
-# evaluate_model.py
+# ml_script_lightgbm_evaluate_model.py
 
 import joblib
 import numpy as np
@@ -7,15 +7,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from scipy.integrate import solve_ivp
 from sklearn.metrics import r2_score, mean_squared_error
 
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
-from mee2rv import mee2rv
-from rv2mee import rv2mee
-import odefunc
 
 # ==============================================================================
 # === DIAGNOSTIC FUNCTION ======================================================
@@ -44,23 +40,12 @@ def inspect_file(filepath):
             print(f"  -> Key '{key}' NOT FOUND in file.")
     print("="*40)
 
-
 # ==============================================================================
 # === HELPER FUNCTIONS =========================================================
 # ==============================================================================
-
-# === NEW HELPER FUNCTION (VECTORIZED) ===
 def compute_thrust_direction_vectorized(mu, mee_array, lam_array):
     """
     Computes optimal thrust direction vectors from arrays of MEE states and costates.
-    
-    Args:
-        mu (float): Gravitational parameter.
-        mee_array (np.ndarray): Array of shape (n_samples, 7) containing MEEs + mass.
-        lam_array (np.ndarray): Array of shape (n_samples, 7) containing costates.
-
-    Returns:
-        np.ndarray: Array of shape (n_samples, 3) with the computed thrust vectors.
     """
     p, f, g, h, k, L = [mee_array[:, i] for i in range(6)]
     lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = [lam_array[:, i] for i in range(6)]
@@ -99,61 +84,10 @@ def compute_thrust_direction_vectorized(mu, mee_array, lam_array):
     
     return u_vecs
 
-def get_initial_state(t_start, forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu):
-    start_idx = np.argmin(np.abs(forwardTspan - t_start))
-    r0, v0 = r_tr[start_idx], v_tr[start_idx]
-    mee0 = rv2mee(r0.reshape(1,3), v0.reshape(1,3), mu).flatten()
-    m0_prop, lam0_prop = mass_tr[start_idx], lam_tr[start_idx]
-    return np.concatenate([mee0, [m0_prop], lam0_prop])
-
-def propagate_and_get_nominal_state(t_eval_points, x0, mu, F, c, m0, g0):
-    t_span = (t_eval_points[0], t_eval_points[-1])
-    sol = solve_ivp(
-        odefunc.odefunc, t_span, x0, args=(mu, F, c, m0, g0),
-        t_eval=sorted(t_eval_points), dense_output=True, method='RK45', rtol=1e-6, atol=1e-9
-    )
-    propagated_mees = sol.y[:6, :].T
-    r_propagated, v_propagated = mee2rv(*propagated_mees.T, mu)
-    return {t: (r, v) for t, r, v in zip(sol.t, r_propagated, v_propagated)}
-
-def add_engineered_features(df, nominal_state_lookup, mu):
-    new_cols = ['pos_error_score', 'vel_error_score', 'energy_error_score']
-    for col in new_cols:
-        df[col] = 0.0
-    
-    epsilon = 1e-9 
-
-    unique_times = df['t'].unique()
-    grouped = df.groupby('t')
-    
-    for t in tqdm(unique_times, desc="[INFO] Engineering features for eval set"):
-        time_key = min(nominal_state_lookup.keys(), key=lambda k: abs(k-t))
-        group_df = grouped.get_group(t)
-        group_indices = group_df.index
-        
-        r_nom, v_nom = nominal_state_lookup[time_key]
-        
-        mees = group_df[['p', 'f', 'g', 'h', 'k', 'L']].values
-        r_samples, v_samples = mee2rv(*mees.T, mu)
-        
-        norm_r_samples = np.linalg.norm(r_samples, axis=1)
-        norm_r_nom = np.linalg.norm(r_nom)
-        df.loc[group_indices, 'pos_error_score'] = (norm_r_samples - norm_r_nom) / (norm_r_samples + norm_r_nom + epsilon)
-
-        norm_v_samples = np.linalg.norm(v_samples, axis=1)
-        norm_v_nom = np.linalg.norm(v_nom)
-        df.loc[group_indices, 'vel_error_score'] = (norm_v_samples - norm_v_nom) / (norm_v_samples + norm_v_nom + epsilon)
-
-        E_nom = 0.5 * np.dot(v_nom, v_nom) - mu / norm_r_nom
-        E_samples = 0.5 * np.sum(v_samples**2, axis=1) - mu / norm_r_samples
-        df.loc[group_indices, 'energy_error_score'] = (E_samples - E_nom) / (E_samples + E_nom + epsilon)
-        
-    return df
-
 # ==============================================================================
 # === MAIN EVALUATION FUNCTION =================================================
 # ==============================================================================
-def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
+def evaluate_model(model_path, data_path, model_name):
     print("\n" + "#"*40)
     print(f"STARTING EVALUATION FOR: {model_name}")
     print("#"*40)
@@ -161,17 +95,23 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
     try:
         model = joblib.load(model_path)
         data = joblib.load(data_path)
+        # Gravitational parameter mu should be consistent across project
+        mu = 27.8996 
     except FileNotFoundError as e:
-        print(f"[ERROR] Could not load file: {e}. Ensure training has been run first.")
+        print(f"[ERROR] Could not load file: {e}. Ensure training has been run and data files are present.")
         return
 
     X_eval_raw = data["X"]
     y_true_raw = data["y"]
     
-    x_cols = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'bundle_idx', 'sigma_idx']
+    # Define columns based on the training script
+    x_cols_raw = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'bundle_idx', 'sigma_idx']
+    features_optimal = ['t', 'p', 'f', 'g', 'h', 'k', 'L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
+    mee_cols = ['p', 'f', 'g', 'h', 'k', 'L', 'mass']
+
     y_cols = [f'y_{i}' for i in range(y_true_raw.shape[1])]
     
-    df_x = pd.DataFrame(X_eval_raw, columns=x_cols)
+    df_x = pd.DataFrame(X_eval_raw, columns=x_cols_raw)
     df_y = pd.DataFrame(y_true_raw, columns=y_cols)
 
     df_combined = pd.concat([df_x, df_y], axis=1).dropna()
@@ -182,34 +122,17 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
 
     print("[INFO] De-duplicating combined evaluation data...")
     group_cols = ['t', 'sigma_idx', 'bundle_idx']
-    df_dedup_combined = df_combined.groupby(group_cols, sort=False).tail(1)
+    df_dedup = df_combined.groupby(group_cols, sort=False).tail(1).reset_index(drop=True)
     
-    df_eval_dedup = df_dedup_combined[x_cols]
-    y_true = df_dedup_combined[y_cols].to_numpy()
-    print(f"[INFO] Data de-duplicated. Samples: {len(y_true)}.")
-
-    mu = nominal_data_bundle["mu"]
-    r_tr, v_tr, mass_tr, lam_tr = nominal_data_bundle["r_tr"], nominal_data_bundle["v_tr"], nominal_data_bundle["mass_tr"], nominal_data_bundle["lam_tr"]
-    forwardTspan = nominal_data_bundle["backTspan"][::-1]
-    F_nom, c_nom, m0_nom, g0_nom = nominal_data_bundle["F"], nominal_data_bundle["c"], nominal_data_bundle["m0"], nominal_data_bundle["g0"]
-
-    t_eval_unique = np.unique(np.round(df_eval_dedup['t'], 6))
-    x0 = get_initial_state(t_eval_unique[0], forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu)
-    nominal_state_lookup = propagate_and_get_nominal_state(t_eval_unique, x0, mu, F_nom, c_nom, m0_nom, g0_nom)
-    
-    df_eval_featured = add_engineered_features(df_eval_dedup.copy(), nominal_state_lookup, mu)
-    
-    feature_cols = ['t', 'p', 'f', 'g', 'h', 'k', 'L', 'mass',
-                    'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7',
-                    'pos_error_score', 'vel_error_score', 'energy_error_score']
-
-    X_features_df = df_eval_featured[feature_cols]
+    X_eval = df_dedup[features_optimal]
+    y_true = df_dedup[y_cols].to_numpy()
+    print(f"[INFO] Data de-duplicated. Final evaluation samples: {len(y_true)}.")
 
     print("[INFO] Making predictions on the evaluation set...")
-    y_pred = model.predict(X_features_df)
+    y_pred = model.predict(X_eval)
     print("[INFO] Predictions complete.")
 
-    # --- ORIGINAL: COSTATE PERFORMANCE METRICS ---
+    # --- COSTATE PERFORMANCE METRICS ---
     r2_per_output = r2_score(y_true, y_pred, multioutput='raw_values')
     r2_avg = np.mean(r2_per_output)
     rmse_per_output = np.sqrt(mean_squared_error(y_true, y_pred, multioutput='raw_values'))
@@ -220,13 +143,13 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
     print(f"Overall Average RMSE:     {rmse_avg:.4f}")
     
     print("\n--- Per-Costate Metrics ---")
-    for i in range(len(r2_per_output)):
-        print(f"  Costate λ_{i+1}: R² = {r2_per_output[i]:.4f}, RMSE = {rmse_per_output[i]:.4f}")
+    costate_labels = ['p', 'f', 'g', 'h', 'k', 'L', 'mass']
+    for i, label in enumerate(costate_labels):
+        print(f"  Costate λ_{label}: R² = {r2_per_output[i]:.4f}, RMSE = {rmse_per_output[i]:.4f}")
 
-    # === NEW: THRUST VECTOR EVALUATION ===
+    # === THRUST VECTOR EVALUATION ===
     print("\n[INFO] Calculating thrust vectors from true and predicted costates...")
-    mee_cols = ['p', 'f', 'g', 'h', 'k', 'L', 'mass']
-    mee_and_mass_array = X_features_df[mee_cols].to_numpy()
+    mee_and_mass_array = df_dedup[mee_cols].to_numpy()
 
     u_true = compute_thrust_direction_vectorized(mu, mee_and_mass_array, y_true)
     u_pred = compute_thrust_direction_vectorized(mu, mee_and_mass_array, y_pred)
@@ -262,7 +185,7 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
         ax.scatter(y_true[:, i], y_pred[:, i], alpha=0.2, s=10)
         lims = [np.min([ax.get_xlim(), ax.get_ylim()]), np.max([ax.get_xlim(), ax.get_ylim()])]
         ax.plot(lims, lims, 'r--', alpha=0.75, zorder=0, label='Perfect Prediction')
-        ax.set_title(f'Costate λ_{i+1} (R² = {r2_per_output[i]:.3f})')
+        ax.set_title(f'Costate λ_{costate_labels[i]} (R² = {r2_per_output[i]:.3f})')
         ax.set_xlabel('True Values')
         ax.set_ylabel('Predicted Values')
         ax.grid(True, linestyle=':')
@@ -276,8 +199,7 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
     print(f"[INFO] Costate plot saved to {plot_filename_costate}")
     plt.close(fig_costate)
 
-
-    # --- NEW PLOTTING: THRUST VECTORS ---
+    # --- PLOTTING: THRUST VECTORS ---
     if len(u_true_valid) > 0:
         print("[INFO] Generating thrust vector plot...")
         fig_thrust, axes_thrust = plt.subplots(1, 3, figsize=(18, 5))
@@ -300,18 +222,12 @@ def evaluate_model(model_path, data_path, nominal_data_bundle, model_name):
         print(f"[INFO] Thrust plot saved to {plot_filename_thrust}")
         plt.close(fig_thrust)
 
-
 if __name__ == '__main__':
     print("--- RUNNING DIAGNOSTIC CHECK ON SAVED DATA FILES ---")
+    # NOTE: This script assumes 'segment_max.pkl' and 'segment_min.pkl' exist as evaluation sets.
     inspect_file("segment_max.pkl")
     inspect_file("segment_min.pkl")
     print("\n--- DIAGNOSTIC CHECK COMPLETE ---\n")
     
-    try:
-        nominal_data = joblib.load("stride_1440min/bundle_data_1440min.pkl")
-    except FileNotFoundError as e:
-        print(f"[ERROR] Could not load nominal data bundle: {e}.")
-        exit()
-
-    evaluate_model("trained_model_max.pkl", "segment_max.pkl", nominal_data, "Max_Uncertainty_Model")
-    evaluate_model("trained_model_min.pkl", "segment_min.pkl", nominal_data, "Min_Uncertainty_Model")
+    evaluate_model("trained_model_max_optimal.pkl", "segment_max.pkl", "Max_Uncertainty_Model")
+    evaluate_model("trained_model_min_optimal.pkl", "segment_min.pkl", "Min_Uncertainty_Model")
