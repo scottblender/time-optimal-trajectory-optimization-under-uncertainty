@@ -16,7 +16,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 from mee2rv import mee2rv
 from rv2mee import rv2mee
-from odefunc import odefunc
+import odefunc
 
 # === Constants ===
 mu = 27.8996
@@ -76,33 +76,6 @@ group_cols = ['t', 'sigma_idx', 'bundle_idx']
 df_dedup_min = df_X_min.groupby(group_cols, sort=False).tail(1).sort_values("orig_index")
 y_min_dedup = df_y_min.iloc[df_dedup_min.index].to_numpy()
 
-# ==============================================================================
-# === SAVE MEAN COVARIANCE DIAGONALS ===========================================
-# ==============================================================================
-cov_cols = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
-mean_cov_diag_max = df_dedup_max[cov_cols].mean().to_numpy()
-np.savetxt("cov_diag_max.txt", mean_cov_diag_max)
-print(f"\n[INFO] Saved mean covariance diagonal for MAX window to cov_diag_max.txt")
-
-mean_cov_diag_min = df_dedup_min[cov_cols].mean().to_numpy()
-np.savetxt("cov_diag_min.txt", mean_cov_diag_min)
-print(f"[INFO] Saved mean covariance diagonal for MIN window to cov_diag_min.txt")
-
-# ==============================================================================
-# === SAVE PROCESSED SEGMENT DATA FOR EVALUATION ============
-# ==============================================================================
-x_cols_to_save = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'bundle_idx', 'sigma_idx']
-
-# Select only the desired columns before converting to numpy and saving
-data_to_save_max = {"X": df_dedup_max[x_cols_to_save].to_numpy(), "y": y_max_dedup}
-data_to_save_min = {"X": df_dedup_min[x_cols_to_save].to_numpy(), "y": y_min_dedup}
-
-# Save the data using joblib
-joblib.dump(data_to_save_max, "segment_max.pkl")
-joblib.dump(data_to_save_min, "segment_min.pkl")
-
-print("\n[INFO] Saved processed MAX segment data to segment_max.pkl")
-print("[INFO] Saved processed MIN segment data to segment_min.pkl")
 
 # ==============================================================================
 # === NOMINAL TRAJECTORY PROPAGATION AND FEATURE ENGINEERING ===================
@@ -122,20 +95,18 @@ def get_initial_state(t_start, forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu):
 def propagate_and_get_nominal_states(t_eval_points, x0, mu, F, c, m0, g0):
     t_span = (t_eval_points[0], t_eval_points[-1])
     sol = solve_ivp(
-        odefunc, t_span, x0, args=(mu, F, c, m0, g0),
+        odefunc.odefunc, t_span, x0, args=(mu, F, c, m0, g0),
         t_eval=sorted(t_eval_points), dense_output=True, method='RK45', rtol=1e-6, atol=1e-9
     )
     r_propagated, v_propagated = mee2rv(*sol.y[:6, :], mu)
-    mass_propagated = sol.y[6, :].T
     lam_propagated = sol.y[7:, :].T
-    return {t: (r, v, lam, m) for t, r, v, lam, m in zip(sol.t, r_propagated, v_propagated, lam_propagated, mass_propagated)}
+    return {t: (r, v, lam) for t, r, v, lam in zip(sol.t, r_propagated, v_propagated, lam_propagated)}
 
-### FEATURE ENGINEERING FOR CORRECTIVE MODEL ONLY ###
+### MODIFIED: FEATURE ENGINEERING FOR CORRECTIVE MODEL ONLY ###
 def engineer_corrective_features(df, df_y, nominal_state_lookup, mu):
     # This function now ONLY creates features and targets for the corrective model.
     df['delta_rx'], df['delta_ry'], df['delta_rz'] = 0.0, 0.0, 0.0
     df['delta_vx'], df['delta_vy'], df['delta_vz'] = 0.0, 0.0, 0.0
-    df['delta_m'] = 0.0 # ADDED MASS DEVIATION
     
     df_y_corr = pd.DataFrame(np.zeros_like(df_y), index=df_y.index)
     unique_times = df['t'].unique()
@@ -145,22 +116,15 @@ def engineer_corrective_features(df, df_y, nominal_state_lookup, mu):
         group_df = df[df['t'] == t]
         group_indices = group_df.index
         
-        r_nom_target, v_nom_target, lam_nom_target, m_nom_target = nominal_state_lookup[time_key]
-        
-        # Cartesian deviations
+        r_nom_target, v_nom_target, lam_nom_target = nominal_state_lookup[time_key]
         mees = group_df[['p', 'f', 'g', 'h', 'k', 'L']].values
         r_samples, v_samples = mee2rv(*mees.T, mu)
+        
         delta_r = r_nom_target - r_samples
         delta_v = v_nom_target - v_samples
         df.loc[group_indices, ['delta_rx', 'delta_ry', 'delta_rz']] = delta_r
         df.loc[group_indices, ['delta_vx', 'delta_vy', 'delta_vz']] = delta_v
-
-        # Mass deviation
-        m_samples = group_df['mass'].values
-        delta_m = m_nom_target - m_samples
-        df.loc[group_indices, 'delta_m'] = delta_m
         
-        # Target (costate correction)
         y_optimal_samples = df_y.loc[group_indices].values
         df_y_corr.loc[group_indices] = y_optimal_samples - lam_nom_target
         
@@ -188,12 +152,12 @@ base_model_params = {'n_estimators': 1500, 'learning_rate': 0.005, 'max_depth': 
 
 # --- Define Feature Sets ---
 features_optimal = ['t', 'p', 'f', 'g', 'h', 'k', 'L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
-features_corrective = features_optimal + ['delta_rx', 'delta_ry', 'delta_rz', 'delta_vx', 'delta_vy', 'delta_vz', 'delta_m']
+features_corrective = features_optimal + ['delta_rx', 'delta_ry', 'delta_rz', 'delta_vx', 'delta_vy', 'delta_vz']
 
 # --- Process and Train MAX models ---
 print("\n" + "="*20 + " TRAINING MAX MODELS " + "="*20)
 is_sigma0_max = df_dedup_max['sigma_idx'] == 0
-is_zero_cov_max = np.all(np.isclose(df_dedup_max[cov_cols].values, 0.0), axis=1)
+is_zero_cov_max = np.all(np.isclose(df_dedup_max[['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']].values, 0.0), axis=1)
 mask_max = ~(is_sigma0_max & is_zero_cov_max)
 
 # Data for Optimal Model (MAX)
@@ -215,7 +179,7 @@ joblib.dump(model_max_corrective, "trained_model_max_corrective.pkl")
 # --- Process and Train MIN models ---
 print("\n" + "="*20 + " TRAINING MIN MODELS " + "="*20)
 is_sigma0_min = df_dedup_min['sigma_idx'] == 0
-is_zero_cov_min = np.all(np.isclose(df_dedup_min[cov_cols].values, 0.0), axis=1)
+is_zero_cov_min = np.all(np.isclose(df_dedup_min[['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']].values, 0.0), axis=1)
 mask_min = ~(is_sigma0_min & is_zero_cov_min)
 
 # Data for Optimal Model (MIN)

@@ -1,18 +1,17 @@
-# ml_script_lightgbm_evaluate.py
+# ml_script_lightgbm_train.py
+
 import os
-import warnings
+import glob
 import joblib
 import numpy as np
+import time
 import pandas as pd
-from scipy.integrate import solve_ivp
-from scipy.spatial.distance import mahalanobis
-from numpy.linalg import inv
 from tqdm import tqdm
+from sklearn.multioutput import MultiOutputRegressor
+from lightgbm import LGBMRegressor
 
-# === Setup ===
-warnings.filterwarnings("ignore", category=UserWarning)
-os.environ['LGBM_LOGLEVEL'] = '2'
-
+# New imports for trajectory propagation and scoring
+from scipy.integrate import solve_ivp
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'helpers')))
 from mee2rv import mee2rv
@@ -20,197 +19,217 @@ from rv2mee import rv2mee
 from odefunc import odefunc
 
 # === Constants ===
-mu, F, c, m0, g0 = 27.8996, 0.33, 4.4246, 4000, 9.81
+mu = 27.8996
 
-# === Metric Utilities ===
-def compute_kl_divergence(mu1, sigma1, mu2, sigma2):
-    """Computes the KL divergence between two multivariate normal distributions."""
-    k = mu1.shape[0]
-    # Add regularization for stability
-    sigma1 = sigma1 + np.eye(k) * 1e-9
-    sigma2 = sigma2 + np.eye(k) * 1e-9
-    try:
-        sigma2_inv = inv(sigma2)
-    except np.linalg.LinAlgError:
-        return np.nan # Return NaN if covariance is singular
+# === Load segment times from width file ===
+with open("stride_1440min/bundle_segment_widths.txt") as f:
+    lines = f.readlines()[1:]
+    times_arr = np.array([list(map(float, line.strip().split())) for line in lines])
+    time_vals = times_arr[:, 0]
+
+    max_idx = int(np.argmax(times_arr[:, 1]))
+    min_idx_raw = int(np.argmin(times_arr[:, 1]))
+    min_idx = np.argsort(times_arr[:, 1])[1] if min_idx_raw == len(times_arr) - 1 else min_idx_raw
+    n = 50
+    t_train_neighbors_max = time_vals[max(0, max_idx - n): max_idx + n + 1]
+    t_train_neighbors_min = time_vals[max(0, min_idx - n): min_idx + n + 1]
+
+# === Init containers ===
+X_train_max, y_train_max = [], []
+X_train_min, y_train_min = [], []
+
+start = time.time()
+batch_files = sorted(glob.glob("baseline_stride_1/batch_*/data.pkl"))
+
+for file in tqdm(batch_files, desc="[INFO] Loading batches"):
+    d = joblib.load(file)
+    Xb, yb = d["X"], d["y"]
+
+    for t in t_train_neighbors_max:
+        idx = np.round(Xb[:, 0], 6) == np.round(t, 6)
+        if np.any(idx): X_train_max.append(Xb[idx]); y_train_max.append(yb[idx])
+    for t in t_train_neighbors_min:
+        idx = np.round(Xb[:, 0], 6) == np.round(t, 6)
+        if np.any(idx): X_train_min.append(Xb[idx]); y_train_min.append(yb[idx])
+
+# --- PROCESSING FOR MAX MODEL ---
+print("\n" + "="*20 + " PROCESSING MAX DATA " + "="*20)
+X_full_max = np.vstack(X_train_max)
+y_full_max = np.vstack(y_train_max)
+df_X_max = pd.DataFrame(X_full_max)
+df_y_max = pd.DataFrame(y_full_max)
+df_X_max.columns = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'bundle_idx', 'sigma_idx']
+df_X_max["orig_index"] = np.arange(len(df_X_max))
+group_cols = ['t', 'sigma_idx', 'bundle_idx']
+df_dedup_max = df_X_max.groupby(group_cols, sort=False).tail(1).sort_values("orig_index")
+y_max_dedup = df_y_max.iloc[df_dedup_max.index].to_numpy()
+
+# --- PROCESSING FOR MIN MODEL ---
+print("\n" + "="*20 + " PROCESSING MIN DATA " + "="*20)
+X_full_min = np.vstack(X_train_min)
+y_full_min = np.vstack(y_train_min)
+df_X_min = pd.DataFrame(X_full_min)
+df_y_min = pd.DataFrame(y_full_min)
+df_X_min.columns = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'bundle_idx', 'sigma_idx']
+df_X_min["orig_index"] = np.arange(len(df_X_min))
+group_cols = ['t', 'sigma_idx', 'bundle_idx']
+df_dedup_min = df_X_min.groupby(group_cols, sort=False).tail(1).sort_values("orig_index")
+y_min_dedup = df_y_min.iloc[df_dedup_min.index].to_numpy()
+
+# ==============================================================================
+# === SAVE MEAN COVARIANCE DIAGONALS ===========================================
+# ==============================================================================
+cov_cols = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
+mean_cov_diag_max = df_dedup_max[cov_cols].mean().to_numpy()
+np.savetxt("cov_diag_max.txt", mean_cov_diag_max)
+print(f"\n[INFO] Saved mean covariance diagonal for MAX window to cov_diag_max.txt")
+
+mean_cov_diag_min = df_dedup_min[cov_cols].mean().to_numpy()
+np.savetxt("cov_diag_min.txt", mean_cov_diag_min)
+print(f"[INFO] Saved mean covariance diagonal for MIN window to cov_diag_min.txt")
+
+# ==============================================================================
+# === SAVE PROCESSED SEGMENT DATA FOR EVALUATION ============
+# ==============================================================================
+x_cols_to_save = ['t', 'p', 'f', 'g', 'h', 'k','L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'bundle_idx', 'sigma_idx']
+
+# Select only the desired columns before converting to numpy and saving
+data_to_save_max = {"X": df_dedup_max[x_cols_to_save].to_numpy(), "y": y_max_dedup}
+data_to_save_min = {"X": df_dedup_min[x_cols_to_save].to_numpy(), "y": y_min_dedup}
+
+# Save the data using joblib
+joblib.dump(data_to_save_max, "segment_max.pkl")
+joblib.dump(data_to_save_min, "segment_min.pkl")
+
+print("\n[INFO] Saved processed MAX segment data to segment_max.pkl")
+print("[INFO] Saved processed MIN segment data to segment_min.pkl")
+
+# ==============================================================================
+# === NOMINAL TRAJECTORY PROPAGATION AND FEATURE ENGINEERING ===================
+# ==============================================================================
+nominal_data = joblib.load("stride_1440min/bundle_data_1440min.pkl")
+r_tr, v_tr, mass_tr, lam_tr = nominal_data["r_tr"], nominal_data["v_tr"], nominal_data["mass_tr"], nominal_data["lam_tr"]
+forwardTspan = nominal_data["backTspan"][::-1]
+F_nom, c_nom, m0_nom, g0_nom = nominal_data["F"], nominal_data["c"], nominal_data["m0"], nominal_data["g0"]
+
+def get_initial_state(t_start, forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu):
+    start_idx = np.argmin(np.abs(forwardTspan - t_start))
+    r0, v0 = r_tr[start_idx], v_tr[start_idx]
+    mee0 = rv2mee(r0.reshape(1,3), v0.reshape(1,3), mu).flatten()
+    m0_prop, lam0_prop = mass_tr[start_idx], lam_tr[start_idx]
+    return np.concatenate([mee0, [m0_prop], lam0_prop])
+
+def propagate_and_get_nominal_states(t_eval_points, x0, mu, F, c, m0, g0):
+    t_span = (t_eval_points[0], t_eval_points[-1])
+    sol = solve_ivp(
+        odefunc, t_span, x0, args=(mu, F, c, m0, g0),
+        t_eval=sorted(t_eval_points), dense_output=True, method='RK45', rtol=1e-6, atol=1e-9
+    )
+    r_propagated, v_propagated = mee2rv(*sol.y[:6, :], mu)
+    mass_propagated = sol.y[6, :].T
+    lam_propagated = sol.y[7:, :].T
+    return {t: (r, v, lam, m) for t, r, v, lam, m in zip(sol.t, r_propagated, v_propagated, lam_propagated, mass_propagated)}
+
+### FEATURE ENGINEERING FOR CORRECTIVE MODEL ONLY ###
+def engineer_corrective_features(df, df_y, nominal_state_lookup, mu):
+    # This function now ONLY creates features and targets for the corrective model.
+    df['delta_rx'], df['delta_ry'], df['delta_rz'] = 0.0, 0.0, 0.0
+    df['delta_vx'], df['delta_vy'], df['delta_vz'] = 0.0, 0.0, 0.0
+    # REMOVED: df['delta_m'] and other new features
+    
+    df_y_corr = pd.DataFrame(np.zeros_like(df_y), index=df_y.index)
+    unique_times = df['t'].unique()
+    
+    for t in tqdm(unique_times, desc="[INFO] Engineering features for corrective model"):
+        time_key = min(nominal_state_lookup.keys(), key=lambda k: abs(k-t))
+        group_df = df[df['t'] == t]
+        group_indices = group_df.index
         
-    trace_term = np.trace(sigma2_inv @ sigma1)
-    diff = mu2 - mu1
-    quad_term = diff.T @ sigma2_inv @ diff
-    
-    sign1, logdet1 = np.linalg.slogdet(sigma1)
-    sign2, logdet2 = np.linalg.slogdet(sigma2)
-    
-    if sign1 <= 0 or sign2 <= 0:
-        return np.nan
+        r_nom_target, v_nom_target, lam_nom_target, m_nom_target = nominal_state_lookup[time_key]
         
-    return 0.5 * (trace_term + quad_term - k + logdet2 - logdet1)
+        # Cartesian deviations
+        mees = group_df[['p', 'f', 'g', 'h', 'k', 'L']].values
+        r_samples, v_samples = mee2rv(*mees.T, mu)
+        delta_r = r_nom_target - r_samples
+        delta_v = v_nom_target - v_samples
+        df.loc[group_indices, ['delta_rx', 'delta_ry', 'delta_rz']] = delta_r
+        df.loc[group_indices, ['delta_vx', 'delta_vy', 'delta_vz']] = delta_v
+        
+        # REMOVED: Mass deviation calculation and other new feature calculations
+        
+        # Target (costate correction)
+        y_optimal_samples = df_y.loc[group_indices].values
+        df_y_corr.loc[group_indices] = y_optimal_samples - lam_nom_target
+        
+    return df, df_y_corr.to_numpy()
 
-def compute_thrust_direction(mee, lam):
-    """Computes the unit vector for the thrust direction from costates."""
-    p, f, g, h, k, L = mee[:-1]
-    lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = lam[:-1]
+# --- Propagate and Engineer Features for MAX data ---
+print("\n[INFO] Propagating and engineering features for MAX segment...")
+t_train_max_unique = np.unique(np.round(df_dedup_max['t'], 6))
+x0_max = get_initial_state(t_train_max_unique[0], forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu)
+nominal_states_max = propagate_and_get_nominal_states(t_train_max_unique, x0_max, mu, F_nom, c_nom, m0_nom, g0_nom)
+df_dedup_max, y_max_corr = engineer_corrective_features(df_dedup_max, df_y_max.iloc[df_dedup_max.index], nominal_states_max, mu)
 
-    lam_matrix = np.array([[lam_p, lam_f, lam_g, lam_h, lam_k, lam_L]]).T
-    SinL, CosL = np.sin(L), np.cos(L)
-    w = 1 + f * CosL + g * SinL
+# --- Propagate and Engineer Features for MIN data ---
+print("\n[INFO] Propagating and engineering features for MIN segment...")
+t_train_min_unique = np.unique(np.round(df_dedup_min['t'], 6))
+x0_min = get_initial_state(t_train_min_unique[0], forwardTspan, r_tr, v_tr, mass_tr, lam_tr, mu)
+nominal_states_min = propagate_and_get_nominal_states(t_train_min_unique, x0_min, mu, F_nom, c_nom, m0_nom, g0_nom)
+df_dedup_min, y_min_corr = engineer_corrective_features(df_dedup_min, df_y_min.iloc[df_dedup_min.index], nominal_states_min, mu)
 
-    if np.isclose(w, 0, atol=1e-10):
-        return np.full(3, np.nan)
 
-    s = 1 + h**2 + k**2
-    C1 = np.sqrt(p / mu)
-    C2 = 1 / w
-    C3 = h * SinL - k * CosL
+# ==============================================================================
+# === BUILD AND TRAIN MODELS ===================================================
+# ==============================================================================
+base_model_params = {'n_estimators': 1500, 'learning_rate': 0.005, 'max_depth': 15, 'min_child_samples': 10, 'force_row_wise': True, 'random_state': 42, 'verbose': -1}
 
-    A = np.array([
-        [0, 2 * p * C2 * C1, 0],
-        [C1 * SinL, C1 * C2 * ((w + 1) * CosL + f), -C1 * (g / w) * C3],
-        [-C1 * CosL, C1 * C2 * ((w + 1) * SinL + g), C1 * (f / w) * C3],
-        [0, 0, C1 * s * CosL * C2 / 2],
-        [0, 0, C1 * s * SinL * C2 / 2],
-        [0, 0, C1 * C2 * C3]
-    ])
-    mat = A.T @ lam_matrix
-    norm_mat = np.linalg.norm(mat)
-    return (mat.flatten() / norm_mat) if norm_mat > 0 else np.full(3, np.nan)
+# --- Define Feature Sets ---
+features_optimal = ['t', 'p', 'f', 'g', 'h', 'k', 'L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
+# REVERTED: Corrective features list now only includes delta_r and delta_v
+features_corrective = features_optimal + ['delta_rx', 'delta_ry', 'delta_rz', 'delta_vx', 'delta_vy', 'delta_vz']
 
-def evaluate_segment(X, y, model, label, bundle_idx):
-    """
-    Evaluates a single data segment by propagating trajectories and computing metrics.
-    NO PLOTTING.
-    """
-    X_b = X[X[:, -2] == bundle_idx]
-    y_b = y[X[:, -2] == bundle_idx]
-    times = np.unique(X_b[:, 0])
-    if len(times) < 3: # Need at least start, middle, end points for propagation
-        return None
-    t0, t1 = times[1], times[2]
+# --- Process and Train MAX models ---
+print("\n" + "="*20 + " TRAINING MAX MODELS " + "="*20)
+is_sigma0_max = df_dedup_max['sigma_idx'] == 0
+is_zero_cov_max = np.all(np.isclose(df_dedup_max[cov_cols].values, 0.0), axis=1)
+mask_max = ~(is_sigma0_max & is_zero_cov_max)
 
-    sigma_indices = np.unique(X_b[:, -1]).astype(int)
-    r_pred, v_pred, m_pred = [], [], []
-    r_actual, v_actual, m_actual = [], [], []
-    
-    feature_cols = ['t', 'p', 'f', 'g', 'h', 'k', 'L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
+# Data for Optimal Model (MAX)
+X_max_optimal = df_dedup_max.loc[mask_max, features_optimal].to_numpy()
+y_max_optimal = y_max_dedup[mask_max]
+print(f"[INFO] Training Optimal MAX model with shape: {X_max_optimal.shape}")
+model_max_optimal = MultiOutputRegressor(LGBMRegressor(**base_model_params))
+model_max_optimal.fit(X_max_optimal, y_max_optimal)
+joblib.dump(model_max_optimal, "trained_model_max_optimal.pkl")
 
-    def get_row(t, sigma_idx, is_y=False):
-        mask = np.isclose(X_b[:, 0], t) & (X_b[:, -1] == sigma_idx)
-        rows = y_b[mask] if is_y else X_b[mask]
-        return rows[0] if len(rows) > 0 else None
+# Data for Corrective Model (MAX)
+X_max_corrective = df_dedup_max.loc[mask_max, features_corrective].to_numpy()
+y_max_corrective = y_max_corr[mask_max]
+print(f"[INFO] Training Corrective MAX model with shape: {X_max_corrective.shape}")
+model_max_corrective = MultiOutputRegressor(LGBMRegressor(**base_model_params))
+model_max_corrective.fit(X_max_corrective, y_max_corrective)
+joblib.dump(model_max_corrective, "trained_model_max_corrective.pkl")
 
-    # Propagate trajectories for all sigma points
-    for sigma_idx in sigma_indices:
-        x_row = get_row(t0, sigma_idx)
-        if x_row is None: continue
+# --- Process and Train MIN models ---
+print("\n" + "="*20 + " TRAINING MIN MODELS " + "="*20)
+is_sigma0_min = df_dedup_min['sigma_idx'] == 0
+is_zero_cov_min = np.all(np.isclose(df_dedup_min[cov_cols].values, 0.0), axis=1)
+mask_min = ~(is_sigma0_min & is_zero_cov_min)
 
-        # Predicted trajectory
-        x_df = pd.DataFrame([x_row[:-2]], columns=feature_cols)
-        lam_pred = model.predict(x_df)[0]
-        S_pred = np.concatenate([x_row[1:8], lam_pred])
-        sol_pred = solve_ivp(lambda t, x: odefunc(t, x, mu, F, c, m0, g0),
-                             [t0, t1], S_pred, t_eval=[t1])
-        r_p, v_p = mee2rv(*sol_pred.y[:6], mu)
-        r_pred.append(r_p.flatten())
-        v_pred.append(v_p.flatten())
-        m_pred.append(sol_pred.y[6, -1])
+# Data for Optimal Model (MIN)
+X_min_optimal = df_dedup_min.loc[mask_min, features_optimal].to_numpy()
+y_min_optimal = y_min_dedup[mask_min]
+print(f"[INFO] Training Optimal MIN model with shape: {X_min_optimal.shape}")
+model_min_optimal = MultiOutputRegressor(LGBMRegressor(**base_model_params))
+model_min_optimal.fit(X_min_optimal, y_min_optimal)
+joblib.dump(model_min_optimal, "trained_model_min_optimal.pkl")
 
-        # Actual trajectory
-        lam_actual = get_row(t0, sigma_idx, is_y=True)
-        if lam_actual is None: continue
-        S_actual = np.concatenate([x_row[1:8], lam_actual])
-        sol_actual = solve_ivp(lambda t, x: odefunc(t, x, mu, F, c, m0, g0),
-                               [t0, t1], S_actual, t_eval=[t1])
-        r_a, v_a = mee2rv(*sol_actual.y[:6], mu)
-        r_actual.append(r_a.flatten())
-        v_actual.append(v_a.flatten())
-        m_actual.append(sol_actual.y[6, -1])
+# Data for Corrective Model (MIN)
+X_min_corrective = df_dedup_min.loc[mask_min, features_corrective].to_numpy()
+y_min_corrective = y_min_corr[mask_min]
+print(f"[INFO] Training Corrective MIN model with shape: {X_min_corrective.shape}")
+model_min_corrective = MultiOutputRegressor(LGBMRegressor(**base_model_params))
+model_min_corrective.fit(X_min_corrective, y_min_corrective)
+joblib.dump(model_min_corrective, "trained_model_min_corrective.pkl")
 
-        if sigma_idx == 0:
-            mee0 = x_row[1:8]
-            del_t_pred = compute_thrust_direction(mee0, lam_pred)
-            del_t_true = compute_thrust_direction(mee0, lam_actual)
-
-    if not r_pred: # If no points were processed, exit
-        return None
-
-    r_pred, v_pred, m_pred = np.array(r_pred), np.array(v_pred), np.array(m_pred)
-    r_actual, v_actual, m_actual = np.array(r_actual), np.array(v_actual), np.array(m_actual)
-    
-    # Get reference state from the dataset at the end time
-    ref_mask = np.isclose(X_b[:, 0], t1) & (X_b[:, -1] == 0)
-    if not np.any(ref_mask):
-        return None
-    row_sigma0_end = X_b[ref_mask][0]
-    mee_ref = row_sigma0_end[1:8]
-    r_ref, v_ref = mee2rv(*mee_ref[:6], mu)
-    r_ref, v_ref = r_ref.flatten(), v_ref.flatten()
-    m_ref = mee_ref[6]
-
-    # Compute distribution statistics using standard numpy
-    mu_pred, cov_pred = np.mean(r_pred, axis=0), np.cov(r_pred.T)
-    mu_act, cov_act = np.mean(r_actual, axis=0), np.cov(r_actual.T)
-    
-    # Compute metrics
-    maha_pred = np.mean([mahalanobis(r, mu_pred, inv(cov_pred + 1e-9*np.eye(3))) for r in r_pred])
-    maha_act = np.mean([mahalanobis(r, mu_act, inv(cov_act + 1e-9*np.eye(3))) for r in r_actual])
-    dot = np.clip(np.dot(del_t_pred, del_t_true), -1, 1)
-    control_angle_deg = np.degrees(np.arccos(dot)) if not (np.isnan(del_t_pred).any() or np.isnan(del_t_true).any()) else np.nan
-
-    return {
-        "label": label,
-        "bundle_idx": bundle_idx,
-        "pos_mse_pred": np.mean(np.sum((r_pred - r_ref) ** 2, axis=1)),
-        "pos_mse_actual": np.mean(np.sum((r_actual - r_ref) ** 2, axis=1)),
-        "vel_mse_pred": np.mean(np.sum((v_pred - v_ref) ** 2, axis=1)),
-        "vel_mse_actual": np.mean(np.sum((v_actual - v_ref) ** 2, axis=1)),
-        "mass_mse_pred": np.mean((m_pred - m_ref) ** 2),
-        "mass_mse_actual": np.mean((m_actual - m_ref) ** 2),
-        "kl_pred_vs_actual": compute_kl_divergence(mu_pred, cov_pred, mu_act, cov_act),
-        "mahal_pred_mean": maha_pred,
-        "mahal_actual_mean": maha_act,
-        "del_t_pred_x": del_t_pred[0],
-        "del_t_pred_y": del_t_pred[1],
-        "del_t_pred_z": del_t_pred[2],
-        "del_t_true_x": del_t_true[0],
-        "del_t_true_y": del_t_true[1],
-        "del_t_true_z": del_t_true[2],
-        "control_angle_deg": control_angle_deg,
-    }
-
-# === Main ===
-def main():
-    try:
-        model_min = joblib.load("trained_model_min_optimal.pkl")
-        model_max = joblib.load("trained_model_max_optimal.pkl")
-        data_max = joblib.load("segment_max.pkl")
-        data_min = joblib.load("segment_min.pkl")
-    except FileNotFoundError as e:
-        print(f"[ERROR] A required data file is missing: {e}. Please ensure all input and model files are present.")
-        return
-
-    os.makedirs("eval_lightgbm_outputs", exist_ok=True)
-    models = {"min": model_min, "max": model_max}
-    results = []
-
-    for label, data in [("min", data_min), ("max", data_max)]:
-        model = models[label]
-        bundle_indices = np.unique(data["X"][:, -2]).astype(int)
-        for bundle_idx in tqdm(bundle_indices, desc=f"Evaluating '{label}' bundles"):
-            res = evaluate_segment(data["X"], data["y"], model, label, bundle_idx)
-            if res:
-                results.append(res)
-    
-    if not results:
-        print("\n[WARN] No results were generated. Check input data and script logic.")
-        return
-
-    df = pd.DataFrame(results)
-    output_path = "eval_lightgbm_outputs/metrics_summary_lgbm.csv"
-    df.to_csv(output_path, index=False)
-    
-    print("\n--- Evaluation Summary ---")
-    print(df.to_string())
-    print(f"\n[SUCCESS] Evaluation complete. Summary saved to {output_path}")
-
-if __name__ == "__main__":
-    main()
+print("\n[SUCCESS] All comparison models have been trained and saved.")
