@@ -20,51 +20,18 @@ from mee2rv import mee2rv
 from rv2mee import rv2mee
 from odefunc import odefunc
 
-# --- MISSION PARAMETERS (USER DEFINED) ---
+# --- MISSION PARAMETERS & CONSTANTS ---
 DU_km = 696340.0
-g0_s = 9.81 / 1000 # g0 in km/s^2
-TU_SECONDS = np.sqrt(DU_km / g0_s)
-
-# --- ANALYSIS CONSTANTS ---
 DEVIATION_THRESHOLD_KM = 100.0
-REPLAN_COOLDOWN_STEPS = 50 # Cooldown in steps before another replan is allowed
+REPLAN_COOLDOWN_STEPS = 50
 NUM_MC_SAMPLES = 1000
 
 # ==============================================================================
-# === HELPER AND PLOTTING FUNCTIONS ============================================
+# === PLOTTING FUNCTIONS =======================================================
 # ==============================================================================
 
-def compute_thrust_direction(mu, mee, lam):
-    """Computes optimal thrust direction for a single state and costate."""
-    p, f, g, h, k, L = mee[:-1]
-    lam_p, lam_f, lam_g, lam_h, lam_k, lam_L = lam[:-1]
-
-    lam_matrix = np.array([[lam_p, lam_f, lam_g, lam_h, lam_k, lam_L]]).T
-    SinL, CosL = np.sin(L), np.cos(L)
-    w = 1 + f * CosL + g * SinL
-
-    if np.isclose(w, 0, atol=1e-10): return np.full(3, np.nan)
-    s = 1 + h**2 + k**2
-    C1 = np.sqrt(p / mu)
-    C2 = 1 / w
-    C3 = h * SinL - k * CosL
-    A = np.array([
-        [0, 2 * p * C2 * C1, 0],
-        [C1 * SinL, C1 * C2 * ((w + 1) * CosL + f), -C1 * (g / w) * C3],
-        [-C1 * CosL, C1 * C2 * ((w + 1) * SinL + g), C1 * (f / w) * C3],
-        [0, 0, C1 * s * CosL * C2 / 2],
-        [0, 0, C1 * s * SinL * C2 / 2],
-        [0, 0, C1 * C2 * C3]
-    ])
-    mat = A.T @ lam_matrix
-    norm = np.linalg.norm(mat)
-    return (mat.flatten() / norm) if norm > 1e-9 else np.zeros(3)
-
 def plot_final_deviations_xyz(t_eval, history_optimal, history_corrective, sol_nom, sol_nom_perturbed, mu, DU_km, window_type):
-    """
-    Plots the final XYZ deviation comparison, including the perturbed nominal case.
-    """
-    # 1. Get Cartesian histories for all trajectories
+    """Plots the final XYZ deviation comparison."""
     r_nom_hist, _ = mee2rv(*sol_nom.y[:6, :], mu)
     r_nom_perturbed_hist, _ = mee2rv(*sol_nom_perturbed.y[:6, :], mu)
     
@@ -74,15 +41,12 @@ def plot_final_deviations_xyz(t_eval, history_optimal, history_corrective, sol_n
     mean_states_corrective = np.mean(history_corrective, axis=1)
     r_corrective_hist, _ = mee2rv(*mean_states_corrective[:, :6].T, mu)
 
-    # 2. Calculate deviation vectors in the inertial XYZ frame relative to the true nominal
     delta_r_optimal = (r_optimal_hist - r_nom_hist) * DU_km
     delta_r_corrective = (r_corrective_hist - r_nom_hist) * DU_km
     delta_r_perturbed = (r_nom_perturbed_hist - r_nom_hist) * DU_km
 
-    # 3. Create the plot
     fig, axes = plt.subplots(3, 1, figsize=(12, 18), sharex=True)
     fig.suptitle(f'Trajectory Deviation in XYZ Frame ({window_type.upper()} Window)', fontsize=16)
-    
     labels = ['X Deviation [km]', 'Y Deviation [km]', 'Z Deviation [km]']
     
     for i in range(3):
@@ -110,9 +74,11 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
     F_val = 0.98 * F_nom # Propagate with perturbed thrust
     mc_states_current = np.copy(initial_mc_states)
 
-    # Use the original feature lists compatible with the old training script
     feature_cols_optimal = ['t', 'p', 'f', 'g', 'h', 'k', 'L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
-    feature_cols_corrective = feature_cols_optimal + ['delta_rx', 'delta_ry', 'delta_rz', 'delta_vx', 'delta_vy', 'delta_vz']
+    feature_cols_corrective = feature_cols_optimal + [
+        'delta_rx', 'delta_ry', 'delta_rz', 'delta_vx', 'delta_vy', 'delta_vz',
+        'delta_m', 't_go', 'pos_dev_mag', 'vel_dev_mag'
+    ]
 
     # --- Initial open-loop "optimal" policy application ---
     tqdm.write(f"\n[INFO] Calculating initial SUB-NOMINAL OPTIMAL control policy for {strategy.upper()} strategy...")
@@ -137,11 +103,9 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
     for i in tqdm(range(len(t_eval) - 1), desc=f"    -> Propagating ({strategy})", leave=False):
         t_start_step, t_end_step = t_eval[i], t_eval[i+1]
         
-        # Propagate all MC samples for one time step
         next_states_list = [solve_ivp(lambda t, x: odefunc(t, x, mu, F_val, c, m0, g0), [t_start_step, t_end_step], s, t_eval=[t_end_step]).y[:, -1] for s in mc_states_current]
         mc_states_current = np.array(next_states_list)
         
-        # Calculate deviation and volume for logging
         current_mc_positions, _ = mee2rv(*mc_states_current[:, :6].T, mu)
         mean_mc_pos = np.mean(current_mc_positions, axis=0)
         r_nom_step, _ = mee2rv(*sol_nom.y[:6, i+1], mu)
@@ -156,7 +120,6 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
             log_action = "REPLAN"
             steps_since_replan = 0 # Reset cooldown
             
-            # Get nominal state information at the current time
             mee_nom_full_curr = sol_nom.y[:7, i+1]
             lam_nom_curr = sol_nom.y[7:, i+1]
             r_nom_curr, v_nom_curr = mee2rv(*mee_nom_full_curr[:6], mu)
@@ -169,18 +132,23 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
             for j in range(len(mc_states_current)):
                 sample_state_mee_mass = mc_states_current[j][:7]
                 
-                # Feature engineering using only r/v deviations
+                # --- On-the-fly Feature Engineering for Prediction ---
                 r_sample, v_sample = mee2rv(*sample_state_mee_mass[:6], mu)
                 delta_r = r_nom_curr - r_sample
                 delta_v = v_nom_curr - v_sample
-                features_corr = np.hstack([t_end_step, sample_state_mee_mass, diag_vals_current, delta_r.flatten(), delta_v.flatten()])
+                delta_m = mee_nom_full_curr[-1] - sample_state_mee_mass[-1]
+                t_go = t_eval[-1] - t_end_step
+                pos_dev_mag = np.linalg.norm(delta_r)
+                vel_dev_mag = np.linalg.norm(delta_v)
+
+                features_corr = np.hstack([
+                    t_end_step, sample_state_mee_mass, diag_vals_current, 
+                    delta_r.flatten(), delta_v.flatten(), delta_m, t_go, pos_dev_mag, vel_dev_mag
+                ])
+                
                 lam_correction = model_corrective.predict(pd.DataFrame([features_corr], columns=feature_cols_corrective))[0]
                 
-                # --- CRITICAL LOGIC: Apply correction based on window type ---
-                if window_type == 'min':
-                    mc_states_current[j][7:] = lam_nom_curr + lam_correction
-                else: # For 'max' window, subtract the correction
-                    mc_states_current[j][7:] = lam_nom_curr - lam_correction
+                mc_states_current[j][7:] = lam_nom_curr + lam_correction if window_type == "min" else lam_nom_curr - lam_correction
         
         history_mc_states.append(np.copy(mc_states_current))
         tqdm.write(f"{i+1:<5} | {t_end_step:<12.2f} | {deviation_km:<18.2f} | {volume_km3:<22.2e} | {log_action:<10}")
@@ -203,47 +171,37 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
     t_eval = np.linspace(t_start_replan, t_end_replan, 100)
     nominal_state_start = np.hstack([rv2mee(r0.reshape(1,3), v0.reshape(1,3), mu).flatten(), m0_val, initial_lam])
     
-    # --- Propagate three core trajectories ---
     print("[INFO] Propagating Nominal, Perturbed, and Controlled trajectories...")
-    # 1. True Nominal (for reference)
     sol_nom = solve_ivp(lambda t, x: odefunc(t, x, data["mu"], data["F"], data["c"], data["m0"], data["g0"]), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval, rtol=1e-8, atol=1e-10)
-    # 2. Perturbed Nominal (baseline for comparison)
     sol_nom_perturbed = solve_ivp(lambda t, x: odefunc(t, x, data["mu"], 0.98 * data["F"], data["c"], data["m0"], data["g0"]), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval, rtol=1e-8, atol=1e-10)
 
-    # --- Generate initial Monte Carlo samples ---
     P_cart = np.diag(np.concatenate([np.diag(np.eye(3)*0.01/(DU_km**2)), np.diag(np.eye(3)*1e-10/((DU_km/86400)**2)), [1e-3/(4000**2)]]))
     cartesian_samples = np.random.multivariate_normal(np.hstack([r0, v0, m0_val]), P_cart, size=NUM_MC_SAMPLES)
     initial_mee_states = np.array([np.hstack([rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten(), s[6]]) for s in cartesian_samples])
     initial_mc_states = np.array([np.hstack([s, initial_lam]) for s in initial_mee_states])
 
-    # --- Run simulations for both control strategies ---
     history_optimal = propagate_and_control(models, 'optimal', t_eval, data, sol_nom, initial_mc_states, window_type)
     history_corrective = propagate_and_control(models, 'corrective', t_eval, data, sol_nom, initial_mc_states, window_type)
 
-    # --- Plot the results ---
     plot_final_deviations_xyz(t_eval, history_optimal, history_corrective, sol_nom, sol_nom_perturbed, data["mu"], DU_km, window_type)
 
-    # --- Generate and print the final performance summary table ---
     print(f"\n--- Performance Summary Table ({window_type.upper()} Window) ---")
     r_final_nom, _ = mee2rv(*sol_nom.y[:6, -1], mu)
     
-    # Optimal stats
-    final_states_opt = history_optimal[-1]
-    final_pos_opt, _ = mee2rv(*final_states_opt[:, :6].T, mu)
-    mean_final_pos_opt, cov_opt = np.mean(final_pos_opt, axis=0), np.cov(final_pos_opt.T)
-    final_dev_opt = np.linalg.norm(mean_final_pos_opt - r_final_nom) * DU_km
-    eigvals_opt = np.maximum(np.linalg.eigvalsh(cov_opt), 0)
-    vol_opt = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals_opt)) * (DU_km**3)
+    # Function to calculate final stats
+    def get_final_stats(history):
+        final_states = history[-1]
+        final_pos, _ = mee2rv(*final_states[:, :6].T, mu)
+        mean_final_pos = np.mean(final_pos, axis=0)
+        cov = np.cov(final_pos.T)
+        final_dev = np.linalg.norm(mean_final_pos - r_final_nom) * DU_km
+        eigvals = np.maximum(np.linalg.eigvalsh(cov), 0)
+        vol = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals)) * (DU_km**3)
+        return final_dev, vol
 
-    # Corrective stats
-    final_states_corr = history_corrective[-1]
-    final_pos_corr, _ = mee2rv(*final_states_corr[:, :6].T, mu)
-    mean_final_pos_corr, cov_corr = np.mean(final_pos_corr, axis=0), np.cov(final_pos_corr.T)
-    final_dev_corr = np.linalg.norm(mean_final_pos_corr - r_final_nom) * DU_km
-    eigvals_corr = np.maximum(np.linalg.eigvalsh(cov_corr), 0)
-    vol_corr = (4/3) * np.pi * np.prod(3.0 * np.sqrt(eigvals_corr)) * (DU_km**3)
+    final_dev_opt, vol_opt = get_final_stats(history_optimal)
+    final_dev_corr, vol_corr = get_final_stats(history_corrective)
     
-    # Perturbed nominal stats
     r_final_pert, _ = mee2rv(*sol_nom_perturbed.y[:6, -1], mu)
     final_dev_pert = np.linalg.norm(r_final_pert - r_final_nom) * DU_km
 
@@ -254,7 +212,6 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
     }
     summary_df = pd.DataFrame(summary_data)
     print(summary_df.to_string(index=False))
-
 
 # ==============================================================================
 # === MAIN EXECUTION BLOCK =====================================================
@@ -279,7 +236,6 @@ def main():
     
     run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data)
     run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data)
-    
     
     print("\n[SUCCESS] All comparison simulations complete.")
 
