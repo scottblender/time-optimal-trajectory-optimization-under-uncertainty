@@ -1,5 +1,3 @@
-# ml_script_lightgbm_replanning.py
-
 import os
 import warnings
 import joblib
@@ -75,23 +73,24 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
     mc_states_current = np.copy(initial_mc_states)
 
     feature_cols_optimal = ['t', 'p', 'f', 'g', 'h', 'k', 'L', 'mass', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
+    
     feature_cols_corrective = feature_cols_optimal + [
         'delta_rx', 'delta_ry', 'delta_rz', 'delta_vx', 'delta_vy', 'delta_vz',
-        'delta_m', 't_go', 'pos_dev_mag', 'vel_dev_mag'
+        'delta_m', 't_go'
     ]
 
-    # --- Initial open-loop "optimal" policy application ---
-    tqdm.write(f"\n[INFO] Calculating initial SUB-NOMINAL OPTIMAL control policy for {strategy.upper()} strategy...")
+    # --- Initial open-loop "optimal" policy application (Control the Mean) ---
+    tqdm.write(f"\n[INFO] Calculating initial control policy for {strategy.upper()} strategy...")
     initial_mee_states = mc_states_current[:, :7]
-    initial_devs = initial_mee_states - np.mean(initial_mee_states, axis=0)
-    initial_diag_vals = np.diag(np.einsum('ji,jk->ik', initial_devs, initial_devs) / (len(initial_mee_states) - 1))
+    mean_initial_state = np.mean(initial_mee_states, axis=0)
+    initial_devs = initial_mee_states - mean_initial_state
+    initial_cov = np.einsum('ji,jk->ik', initial_devs, initial_devs) / (len(initial_mee_states) - 1)
+    initial_diag_vals = np.diag(initial_cov)
     
     model_optimal = models['optimal']
-    for j in range(len(mc_states_current)):
-        sample_state_mee_mass = mc_states_current[j][:7]
-        features = np.hstack([t_eval[0], sample_state_mee_mass, initial_diag_vals])
-        predicted_lam = model_optimal.predict(pd.DataFrame([features], columns=feature_cols_optimal))[0]
-        mc_states_current[j][7:] = predicted_lam
+    features_opt = np.hstack([t_eval[0], mean_initial_state, initial_diag_vals])
+    predicted_lam_optimal = model_optimal.predict(pd.DataFrame([features_opt], columns=feature_cols_optimal))[0]
+    mc_states_current[:, 7:] = predicted_lam_optimal # Apply same control to all samples
 
     history_mc_states = [np.copy(mc_states_current)]
     steps_since_replan = REPLAN_COOLDOWN_STEPS
@@ -124,31 +123,29 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
             lam_nom_curr = sol_nom.y[7:, i+1]
             r_nom_curr, v_nom_curr = mee2rv(*mee_nom_full_curr[:6], mu)
             
+            # Control based on the mean of the distribution
             mee_states_current = mc_states_current[:, :7]
-            devs_current = mee_states_current - np.mean(mee_states_current, axis=0)
+            mean_mee_state_curr = np.mean(mee_states_current, axis=0)
+            devs_current = mee_states_current - mean_mee_state_curr
             diag_vals_current = np.diag(np.einsum('ji,jk->ik', devs_current, devs_current) / (len(mc_states_current) - 1))
 
-            model_corrective = models['corrective']
-            for j in range(len(mc_states_current)):
-                sample_state_mee_mass = mc_states_current[j][:7]
-                
-                # --- On-the-fly Feature Engineering for Prediction ---
-                r_sample, v_sample = mee2rv(*sample_state_mee_mass[:6], mu)
-                delta_r = r_nom_curr - r_sample
-                delta_v = v_nom_curr - v_sample
-                delta_m = mee_nom_full_curr[-1] - sample_state_mee_mass[-1]
-                t_go = t_eval[-1] - t_end_step
-                pos_dev_mag = np.linalg.norm(delta_r)
-                vel_dev_mag = np.linalg.norm(delta_v)
+            # --- On-the-fly Feature Engineering for Prediction (Corrected) ---
+            r_mean_curr, v_mean_curr = mee2rv(*mean_mee_state_curr[:6], mu)
+            delta_r = r_nom_curr - r_mean_curr
+            delta_v = v_nom_curr - v_mean_curr
+            delta_m = mee_nom_full_curr[-1] - mean_mee_state_curr[-1]
+            t_go = t_eval[-1] - t_end_step
 
-                features_corr = np.hstack([
-                    t_end_step, sample_state_mee_mass, diag_vals_current, 
-                    delta_r.flatten(), delta_v.flatten(), delta_m, t_go, pos_dev_mag, vel_dev_mag
-                ])
-                
-                lam_correction = model_corrective.predict(pd.DataFrame([features_corr], columns=feature_cols_corrective))[0]
-                
-                mc_states_current[j][7:] = lam_nom_curr + lam_correction if window_type == "min" else lam_nom_curr - lam_correction
+            features_corr = np.hstack([
+                t_end_step, mean_mee_state_curr, diag_vals_current, 
+                delta_r.flatten(), delta_v.flatten(), delta_m, t_go
+            ])
+            
+            model_corrective = models['corrective']
+            lam_correction = model_corrective.predict(pd.DataFrame([features_corr], columns=feature_cols_corrective))[0]
+            
+            # Apply same new control law to all samples
+            mc_states_current[:, 7:] = lam_nom_curr + lam_correction if window_type == "min" else lam_nom_curr - lam_correction
         
         history_mc_states.append(np.copy(mc_states_current))
         tqdm.write(f"{i+1:<5} | {t_end_step:<12.2f} | {deviation_km:<18.2f} | {volume_km3:<22.2e} | {log_action:<10}")
@@ -175,7 +172,9 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
     sol_nom = solve_ivp(lambda t, x: odefunc(t, x, data["mu"], data["F"], data["c"], data["m0"], data["g0"]), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval, rtol=1e-8, atol=1e-10)
     sol_nom_perturbed = solve_ivp(lambda t, x: odefunc(t, x, data["mu"], 0.98 * data["F"], data["c"], data["m0"], data["g0"]), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval, rtol=1e-8, atol=1e-10)
 
-    P_cart = np.diag(np.concatenate([np.diag(np.eye(3)*0.01/(DU_km**2)), np.diag(np.eye(3)*1e-10/((DU_km/86400)**2)), [1e-3/(4000**2)]]))
+    g0 = 9.81/1000
+    TU = np.sqrt(DU_km/g0)
+    P_cart = np.diag(np.concatenate([np.diag(np.eye(3)*0.01/(DU_km**2)), np.diag(np.eye(3)*1e-10/((DU_km/TU)**2)), [1e-3/(4000**2)]]))
     cartesian_samples = np.random.multivariate_normal(np.hstack([r0, v0, m0_val]), P_cart, size=NUM_MC_SAMPLES)
     initial_mee_states = np.array([np.hstack([rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten(), s[6]]) for s in cartesian_samples])
     initial_mc_states = np.array([np.hstack([s, initial_lam]) for s in initial_mee_states])
@@ -188,7 +187,6 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
     print(f"\n--- Performance Summary Table ({window_type.upper()} Window) ---")
     r_final_nom, _ = mee2rv(*sol_nom.y[:6, -1], mu)
     
-    # Function to calculate final stats
     def get_final_stats(history):
         final_states = history[-1]
         final_pos, _ = mee2rv(*final_states[:, :6].T, mu)
@@ -230,8 +228,14 @@ def main():
 
     os.makedirs("uncertainty_aware_outputs", exist_ok=True)
     time_vals = times_arr[:, 0]
-    max_idx = int(np.argmax(times_arr[:, 1])); t_start_max, t_end_replan_max = time_vals[max(0, max_idx - 1)], time_vals[max_idx]
-    min_idx_raw = int(np.argmin(times_arr[:, 1])); min_idx = np.argsort(times_arr[:, 1])[1] if min_idx_raw == len(times_arr) - 1 else min_idx_raw
+    
+    # --- CORRECTED: Robust logic for finding min/max indices ---
+    max_idx = int(np.argmax(times_arr[:, 1]))
+    t_start_max, t_end_replan_max = time_vals[max(0, max_idx - 1)], time_vals[max_idx]
+    
+    search_end_idx = int(0.75 * len(times_arr))
+    search_array = times_arr[:search_end_idx, 1]
+    min_idx = np.argmin(search_array)
     t_start_min, t_end_replan_min = time_vals[max(0, min_idx - 1)], time_vals[min_idx]
     
     run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data)
