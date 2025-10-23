@@ -703,14 +703,13 @@ def main():
     min_idx = np.argmin(search_array)
     t_start_min, t_end_replan_min = time_vals[max(0, min_idx - 1)], time_vals[min_idx]
     
-    # Run Min Window simulations
-    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, covariance_multiplier=1.0)
-    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, covariance_multiplier=2.0)
-    
     # Run Max Window simulations
     run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, covariance_multiplier=1.0)
     run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, covariance_multiplier=2.0)
     
+    # Run Min Window simulations
+    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, covariance_multiplier=1.0)
+    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, covariance_multiplier=2.0)
     
     print("\n[SUCCESS] All comparison simulations complete.")
 
