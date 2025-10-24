@@ -402,7 +402,7 @@ def plot_final_deviations_rcn_and_thrust(t_eval, history_optimal, history_correc
 # === CORE PROPAGATION AND CONTROL LOGIC =======================================
 # ==============================================================================
 
-def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_states, window_type):
+def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_states, window_type, covariance_multiplier=1.0):
     mu, F_nom, c, m0, g0 = data["mu"], data["F"], data["c"], data["m0"], data["g0"]
     F_val = 0.98 * F_nom # Propagate with perturbed thrust
     mc_states_current = np.copy(initial_mc_states) # Shape (N_MC, 14)
@@ -420,7 +420,13 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
     mean_initial_state = np.mean(initial_mee_states, axis=0)
     initial_devs = initial_mee_states - mean_initial_state
     initial_cov = np.einsum('ji,jk->ik', initial_devs, initial_devs) / (len(initial_mee_states) - 1)
-    initial_diag_vals = np.diag(initial_cov) # (7,)
+    
+    # --- KEY CHANGE: Scale the *measured* covariance by the multiplier ---
+    # This "tells" the model what it should *believe* the covariance is.
+    initial_diag_vals = np.diag(initial_cov) * covariance_multiplier
+    if covariance_multiplier != 1.0:
+        tqdm.write(f"[INFO] Applying covariance multiplier (x{covariance_multiplier}) to model features.")
+    # --- END OF CHANGE ---
     
     model_optimal = models['optimal']
     features_opt = np.hstack([t_eval[0], mean_initial_state, initial_diag_vals])
@@ -430,7 +436,7 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
     steps_since_replan = REPLAN_COOLDOWN_STEPS
     replan_times = [] # List to store times of replanning
     
-    tqdm.write(f"--- Propagating with {strategy.upper()} Strategy ---")
+    tqdm.write(f"--- Propagating with {strategy.upper()} Strategy (Model sees Cov x{covariance_multiplier}) ---")
     tqdm.write(f"{'Step':<5} | {'Time (TU)':<12} | {'Deviation (km)':<18} | {'Ellipsoid Vol (km^3)':<22} | {'Action':<10}")
     tqdm.write("-" * 80)
 
@@ -499,7 +505,10 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
             
             if mee_states_current.shape[0] > 1:
                 devs_current = mee_states_current - mean_mee_state_curr
-                diag_vals_current = np.diag(np.einsum('ji,jk->ik', devs_current, devs_current) / (len(mc_states_current) - 1))
+                # --- SECOND KEY CHANGE: Scale the *current* covariance ---
+                cov_current = np.einsum('ji,jk->ik', devs_current, devs_current) / (len(mc_states_current) - 1)
+                diag_vals_current = np.diag(cov_current) * covariance_multiplier # <-- Modified line
+                # --- END OF CHANGE ---
             else:
                 diag_vals_current = np.zeros(7)
 
@@ -537,7 +546,7 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
 # === MAIN SIMULATION RUNNER ===================================================
 # ==============================================================================
 
-def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type, data, covariance_multiplier=1.0):
+def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type, data, initial_mc_states, covariance_multiplier=1.0):
     print(f"\n{'='*25} Running Comparison for {window_type.upper()} WINDOW (Cov x{covariance_multiplier}) {'='*25}")
     
     mu, r_nom_hist, v_nom_hist = data["mu"], data["r_tr"], data["v_tr"]
@@ -568,39 +577,22 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
     sol_nom = solve_ivp(lambda t, x: odefunc(t, x, data["mu"], data["F"], data["c"], data["m0"], data["g0"]), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval, rtol=1e-8, atol=1e-10)
     sol_nom_perturbed = solve_ivp(lambda t, x: odefunc(t, x, data["mu"], 0.98 * data["F"], data["c"], data["m0"], data["g0"]), [t_start_replan, t_end_replan], nominal_state_start, t_eval=t_eval, rtol=1e-8, atol=1e-10)
 
-    P_cart_base = np.diag(np.concatenate([
-        np.diag(np.eye(3) * 0.01 / (DU_km**2)), 
-        np.diag(np.eye(3) * 1e-10 / ((DU_km / TU_s)**2)), 
-        [1e-3 / (4000**2)]
-    ]))
-    P_cart = covariance_multiplier * P_cart_base
-    
-    try:
-        # Define the mean vector for the 7D Cartesian state (r, v, m)
-        cartesian_mean = np.hstack([r0, v0, m0_val])
-        
-        # Use the new function to get 3-sigma-bounded samples
-        print(f"[INFO] Generating {NUM_MC_SAMPLES} MC samples within the 3-sigma ellipsoid...")
-        cartesian_samples = get_3sigma_mvn_samples(cartesian_mean, P_cart, n_samples=NUM_MC_SAMPLES)
-        print(f"[INFO] ...sampling complete. Generated {cartesian_samples.shape[0]} samples.")
+    # --- MC Sample Generation logic removed from here ---
 
-        initial_mee_states_list = []
-        for s in cartesian_samples:
-            mee_state = rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten()
-            initial_mee_states_list.append(np.hstack([mee_state, s[6]])) # (7,)
-        initial_mee_states = np.array(initial_mee_states_list) # (N_MC, 7)
-        # initial_lam is (7,)
-        initial_mc_states = np.hstack([initial_mee_states, np.tile(initial_lam, (NUM_MC_SAMPLES, 1))]) # (N_MC, 14)
-    
-    except Exception as e:
-        print(f"[ERROR] Failed during MC sampling or MEE conversion: {e}")
-        print("Bypassing MC propagation.")
+    # --- Propagate using the provided initial_mc_states ---
+    if initial_mc_states is None:
+        print("[ERROR] No initial MC states provided. Bypassing MC propagation.")
         history_optimal = np.array([nominal_state_start])
         history_corrective = np.array([nominal_state_start])
         corrective_replan_times = []
     else:
-        history_optimal, _ = propagate_and_control(models, 'optimal', t_eval, data, sol_nom, initial_mc_states, window_type)
-        history_corrective, corrective_replan_times = propagate_and_control(models, 'corrective', t_eval, data, sol_nom, initial_mc_states, window_type)
+        # Pass the covariance_multiplier to propagate_and_control
+        history_corrective, corrective_replan_times = propagate_and_control(
+            models, 'corrective', t_eval, data, sol_nom, initial_mc_states, window_type, covariance_multiplier
+        )
+        history_optimal, _ = propagate_and_control(
+            models, 'optimal', t_eval, data, sol_nom, initial_mc_states, window_type, covariance_multiplier
+        )
 
 
     plot_final_deviations_rcn_and_thrust(
@@ -694,22 +686,77 @@ def main():
 
     os.makedirs("uncertainty_aware_outputs", exist_ok=True)
     time_vals = times_arr[:, 0]
+    mu = data["mu"] # Get mu for sample generation
     
+    # --- Define constants for sample generation ---
+    g0 = 9.81/1000 # km/s^2
+    TU_s = np.sqrt(DU_km / g0)
+    P_cart_base = np.diag(np.concatenate([
+        np.diag(np.eye(3) * 0.015 / (DU_km**2)), 
+        np.diag(np.eye(3) * 1.5e-10 / ((DU_km / TU_s)**2)), 
+        [1.5e-3 / (4000**2)]
+    ]))
+    P_cart_1x = 1.0 * P_cart_base # We always generate samples from the 1.0x covariance
+
+    # --- MAX Window Setup & Sample Generation ---
+    print("\n[INFO] Setting up MAX Window simulation...")
     max_idx = int(np.argmax(times_arr[:, 1]))
     t_start_max, t_end_replan_max = time_vals[max(0, max_idx - 1)], time_vals[max_idx]
     
+    idx_start_max = np.argmin(np.abs(data["backTspan"][::-1] - t_start_max))
+    r0_max, v0_max, m0_val_max, initial_lam_max = data["r_tr"][idx_start_max], data["v_tr"][idx_start_max], data["mass_tr"][idx_start_max], data["lam_tr"][idx_start_max]
+
+    initial_mc_states_max = None
+    try:
+        cartesian_mean_max = np.hstack([r0_max, v0_max, m0_val_max])
+        print(f"[INFO] Generating {NUM_MC_SAMPLES} MC samples for MAX window (1.0x Cov)...")
+        cartesian_samples_max = get_3sigma_mvn_samples(cartesian_mean_max, P_cart_1x, n_samples=NUM_MC_SAMPLES)
+        
+        initial_mee_states_list = []
+        for s in cartesian_samples_max:
+            mee_state = rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten()
+            initial_mee_states_list.append(np.hstack([mee_state, s[6]]))
+        initial_mee_states_max = np.array(initial_mee_states_list)
+        initial_mc_states_max = np.hstack([initial_mee_states_max, np.tile(initial_lam_max, (NUM_MC_SAMPLES, 1))])
+        print(f"[INFO] ...sampling complete for MAX window.")
+    except Exception as e:
+        print(f"[ERROR] Failed during MC sampling for MAX window: {e}")
+        return # Can't continue
+    
+    # Run Max Window simulations (pass the *same* samples to both)
+    run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=1.0)
+    run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=2.0)
+    
+    # --- MIN Window Setup & Sample Generation ---
+    print("\n[INFO] Setting up MIN Window simulation...")
     search_end_idx = int(0.75 * len(times_arr))
     search_array = times_arr[:search_end_idx, 1]
     min_idx = np.argmin(search_array)
     t_start_min, t_end_replan_min = time_vals[max(0, min_idx - 1)], time_vals[min_idx]
-    
-    # Run Max Window simulations
-    run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, covariance_multiplier=1.0)
-    run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, covariance_multiplier=2.0)
-    
-    # Run Min Window simulations
-    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, covariance_multiplier=1.0)
-    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, covariance_multiplier=2.0)
+
+    idx_start_min = np.argmin(np.abs(data["backTspan"][::-1] - t_start_min))
+    r0_min, v0_min, m0_val_min, initial_lam_min = data["r_tr"][idx_start_min], data["v_tr"][idx_start_min], data["mass_tr"][idx_start_min], data["lam_tr"][idx_start_min]
+
+    initial_mc_states_min = None
+    try:
+        cartesian_mean_min = np.hstack([r0_min, v0_min, m0_val_min])
+        print(f"[INFO] Generating {NUM_MC_SAMPLES} MC samples for MIN window (1.0x Cov)...")
+        cartesian_samples_min = get_3sigma_mvn_samples(cartesian_mean_min, P_cart_1x, n_samples=NUM_MC_SAMPLES)
+        
+        initial_mee_states_list = []
+        for s in cartesian_samples_min:
+            mee_state = rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten()
+            initial_mee_states_list.append(np.hstack([mee_state, s[6]]))
+        initial_mee_states_min = np.array(initial_mee_states_list)
+        initial_mc_states_min = np.hstack([initial_mee_states_min, np.tile(initial_lam_min, (NUM_MC_SAMPLES, 1))])
+        print(f"[INFO] ...sampling complete for MIN window.")
+    except Exception as e:
+        print(f"[ERROR] Failed during MC sampling for MIN window: {e}")
+        return
+
+    # Run Min Window simulations (pass the *same* samples to both)
+    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=1.0)
+    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=2.0)
     
     print("\n[SUCCESS] All comparison simulations complete.")
 
