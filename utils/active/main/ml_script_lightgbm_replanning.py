@@ -604,7 +604,7 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
     
     if sol_nom.y.shape[1] < 2:
         print("[ERROR] Nominal solution failed to propagate. Cannot generate summary.")
-        return
+        return None # <-- MODIFIED
         
     r_final_nom, _ = mee2rv(*sol_nom.y[:6, -1], mu)
     
@@ -664,7 +664,18 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
         "Final Ellipsoid Volume (km^3)": [f"{vol_opt:.2e}", f"{vol_corr:.2e}", "N/A"]
     }
     summary_df = pd.DataFrame(summary_data)
+    
+    # --- ADDED ---
+    summary_df['Window'] = window_type.upper()
+    summary_df['Cov. Multiplier'] = covariance_multiplier
+    # Reorder columns
+    cols = ['Window', 'Cov. Multiplier', 'Strategy', 'Final Deviation (km)', 'Final Ellipsoid Volume (km^3)']
+    summary_df = summary_df[cols]
+    # --- END ADDED ---
+    
     print(summary_df.to_string(index=False))
+    
+    return summary_df # <-- MODIFIED
 
 # ==============================================================================
 # === MAIN EXECUTION BLOCK =====================================================
@@ -684,7 +695,8 @@ def main():
         print(f"[ERROR] An unexpected error occurred loading data: {e}")
         return
 
-    os.makedirs("uncertainty_aware_outputs", exist_ok=True)
+    output_dir = "uncertainty_aware_outputs" # <-- MODIFIED
+    os.makedirs(output_dir, exist_ok=True) # <-- MODIFIED
     time_vals = times_arr[:, 0]
     mu = data["mu"] # Get mu for sample generation
     
@@ -697,6 +709,8 @@ def main():
         [1.5e-3 / (4000**2)]
     ]))
     P_cart_1x = 1.0 * P_cart_base # We always generate samples from the 1.0x covariance
+
+    all_results = [] # <-- ADDED: List to store summary DataFrames
 
     # --- MAX Window Setup & Sample Generation ---
     print("\n[INFO] Setting up MAX Window simulation...")
@@ -724,8 +738,15 @@ def main():
         return # Can't continue
     
     # Run Max Window simulations (pass the *same* samples to both)
-    run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=1.0)
-    run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=2.0)
+    # --- MODIFIED to capture results ---
+    res_max_1 = run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=1.0)
+    if res_max_1 is not None:
+        all_results.append(res_max_1)
+        
+    res_max_2 = run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=2.0)
+    if res_max_2 is not None:
+        all_results.append(res_max_2)
+    # --- END MODIFIED ---
     
     # --- MIN Window Setup & Sample Generation ---
     print("\n[INFO] Setting up MIN Window simulation...")
@@ -755,10 +776,29 @@ def main():
         return
 
     # Run Min Window simulations (pass the *same* samples to both)
-    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=1.0)
-    run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=2.0)
+    # --- MODIFIED to capture results ---
+    res_min_1 = run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=1.0)
+    if res_min_1 is not None:
+        all_results.append(res_min_1)
+
+    res_min_2 = run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=2.0)
+    if res_min_2 is not None:
+        all_results.append(res_min_2)
+    # --- END MODIFIED ---
     
-    print("\n[SUCCESS] All comparison simulations complete.")
+    # --- ADDED: Concatenate all results and save to CSV ---
+    if all_results:
+        try:
+            final_results_df = pd.concat(all_results, ignore_index=True)
+            csv_filename = os.path.join(output_dir, "comparison_summary_all_runs.csv")
+            final_results_df.to_csv(csv_filename, index=False, float_format='%.2e')
+            print(f"\n[SUCCESS] All comparison simulations complete.")
+            print(f"[Saved CSV] Summary of all runs saved to: {csv_filename}")
+        except Exception as e:
+            print(f"\n[ERROR] Failed to save summary CSV to {csv_filename}: {e}")
+    else:
+        print("\n[WARN] No results were generated, skipping CSV save.")
+    # --- END ADDED ---
 
 if __name__ == "__main__":
     main()
