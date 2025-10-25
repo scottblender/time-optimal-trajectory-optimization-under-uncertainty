@@ -7,7 +7,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
-from scipy.stats import chi2, norm  # <-- Added chi2 and norm
+from scipy.stats import chi2, norm
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -194,6 +194,8 @@ def plot_final_deviations_rcn_and_thrust(t_eval, history_optimal, history_correc
     Plots the final RCN deviation and Thrust component comparison.
     This function is robust to integration failures by clipping plots to the
     minimum common trajectory length.
+    
+    <--- MODIFIED: Now returns a dictionary with plot data or None on failure ---
     """
     
     # --- Set larger font sizes for conference paper readability ---
@@ -214,7 +216,7 @@ def plot_final_deviations_rcn_and_thrust(t_eval, history_optimal, history_correc
     if n_nom < 2:
         print("[ERROR] Nominal trajectory failed to propagate. Skipping plot.")
         plt.rcParams.update(original_rc_params) # Reset params before exiting
-        return
+        return None # <--- MODIFIED
         
     t_nom = t_eval[:n_nom]
     r_nom_hist_cart, v_nom_hist_cart = mee2rv(
@@ -393,10 +395,212 @@ def plot_final_deviations_rcn_and_thrust(t_eval, history_optimal, history_correc
     plt.savefig(os.path.join("uncertainty_aware_outputs", fname))
     plt.close()
     
+    # --- MODIFIED: Package data for return ---
+    plot_data = {
+        't_opt': t_opt, 'delta_r_opt': delta_r_optimal, 'u_opt_rcn': u_optimal_rcn,
+        't_corr': t_corr, 'delta_r_corr': delta_r_corrective, 'u_corr_rcn': u_corrective_rcn
+    }
+    
     # Reset matplotlib parameters to default
     plt.rcParams.update(original_rc_params)
     
     print(f"\n[Saved Plot] {fname}")
+    
+    return plot_data # <--- MODIFIED
+
+# ==============================================================================
+# === PLOTTING FUNCTION (FOR DELTA CONTROL) ====================================
+# ==============================================================================
+
+def plot_control_delta(plot_data_1x, plot_data_2x, window_type, output_dir):
+    """
+    Plots the absolute difference in RCN control components between
+    the 1.0x Cov and 2.0x Cov runs.
+    """
+    
+    # --- Set larger font sizes for conference paper readability ---
+    font_size = 18
+    original_rc_params = plt.rcParams.copy() # Save original settings
+    plt.rcParams.update({
+        'font.size': font_size,
+        'axes.titlesize': font_size + 2,
+        'axes.labelsize': font_size,
+        'xtick.labelsize': font_size - 2,
+        'ytick.labelsize': font_size - 2,
+        'legend.fontsize': font_size - 2,
+        'figure.titlesize': font_size + 4,
+    })
+
+    try:
+        # --- 1. Process Optimal (Open-Loop) Delta ---
+        t_opt_1 = plot_data_1x['t_opt']
+        u_opt_1 = plot_data_1x['u_opt_rcn']
+        t_opt_2 = plot_data_2x['t_opt']
+        u_opt_2 = plot_data_2x['u_opt_rcn']
+        
+        n_opt = min(len(t_opt_1), len(t_opt_2))
+        t_opt_plot = t_opt_1[:n_opt]
+        delta_u_opt = np.abs(u_opt_1[:n_opt] - u_opt_2[:n_opt]) # (n_opt, 3)
+
+        # --- 2. Process Corrective (Closed-Loop) Delta ---
+        t_corr_1 = plot_data_1x['t_corr']
+        u_corr_1 = plot_data_1x['u_corr_rcn']
+        t_corr_2 = plot_data_2x['t_corr']
+        u_corr_2 = plot_data_2x['u_corr_rcn']
+        
+        n_corr = min(len(t_corr_1), len(t_corr_2))
+        t_corr_plot = t_corr_1[:n_corr]
+        delta_u_corr = np.abs(u_corr_1[:n_corr] - u_corr_2[:n_corr]) # (n_corr, 3)
+
+    except KeyError as e:
+        print(f"[ERROR] Missing key {e} in plot_data for delta plot. Skipping.")
+        plt.rcParams.update(original_rc_params) # Reset params
+        return
+    except Exception as e:
+        print(f"[ERROR] Failed to process data for delta plot: {e}. Skipping.")
+        plt.rcParams.update(original_rc_params) # Reset params
+        return
+
+    # --- 3. Plotting ---
+    fig, axes = plt.subplots(3, 2, figsize=(20, 18), sharex=True)
+    
+    # <--- MODIFIED: Added 'r' to make these raw strings ---
+    delta_labels = [r'Abs. Control Delta ($|\Delta u_r|$)', 
+                    r'Abs. Control Delta ($|\Delta u_c|$)', 
+                    r'Abs. Control Delta ($|\Delta u_n|$)']
+    
+    c_opt = '0.4'       # Medium gray
+    ls_opt = '--'       # Dashed
+    
+    c_corr = '0.0'      # Black
+    ls_corr = ':'       # Dotted
+    
+    for i in range(3):
+        # Left Column: Optimal Delta
+        ax_opt = axes[i, 0]
+        ax_opt.plot(t_opt_plot, delta_u_opt[:, i], color=c_opt, linestyle=ls_opt, lw=2.5)
+        ax_opt.set_ylabel(delta_labels[i])
+        ax_opt.grid(True, linestyle=':')
+        
+        # Right Column: Corrective Delta
+        ax_corr = axes[i, 1]
+        ax_corr.plot(t_corr_plot, delta_u_corr[:, i], color=c_corr, linestyle=ls_corr, lw=2.5)
+        ax_corr.grid(True, linestyle=':')
+
+        if i == 0:
+            ax_opt.set_title("Optimal (Open-Loop) Control Delta")
+            ax_corr.set_title("Corrective (Closed-Loop) Control Delta")
+        
+    axes[-1, 0].set_xlabel('Time [TU]')
+    axes[-1, 1].set_xlabel('Time [TU]')
+    
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fname = f"control_delta_rcn_{window_type}.pdf"
+    plt.savefig(os.path.join(output_dir, fname))
+    plt.close()
+    
+    # Reset matplotlib parameters to default
+    plt.rcParams.update(original_rc_params)
+    
+    print(f"\n[Saved Plot] {fname}")
+
+
+# ==============================================================================
+# === PLOTTING FUNCTION (FOR DELTA DEVIATION) ==================================
+# ==============================================================================
+
+def plot_deviation_delta(plot_data_1x, plot_data_2x, window_type, output_dir):
+    """
+    Plots the absolute difference in RCN deviation components between
+    the 1.0x Cov and 2.0x Cov runs.
+    """
+    
+    # --- Set larger font sizes for conference paper readability ---
+    font_size = 18
+    original_rc_params = plt.rcParams.copy() # Save original settings
+    plt.rcParams.update({
+        'font.size': font_size,
+        'axes.titlesize': font_size + 2,
+        'axes.labelsize': font_size,
+        'xtick.labelsize': font_size - 2,
+        'ytick.labelsize': font_size - 2,
+        'legend.fontsize': font_size - 2,
+        'figure.titlesize': font_size + 4,
+    })
+
+    try:
+        # --- 1. Process Optimal (Open-Loop) Delta ---
+        t_opt_1 = plot_data_1x['t_opt']
+        delta_r_opt_1 = plot_data_1x['delta_r_opt']
+        t_opt_2 = plot_data_2x['t_opt']
+        delta_r_opt_2 = plot_data_2x['delta_r_opt']
+        
+        n_opt = min(len(t_opt_1), len(t_opt_2))
+        t_opt_plot = t_opt_1[:n_opt]
+        delta_dev_opt = np.abs(delta_r_opt_1[:n_opt] - delta_r_opt_2[:n_opt]) # (n_opt, 3)
+
+        # --- 2. Process Corrective (Closed-Loop) Delta ---
+        t_corr_1 = plot_data_1x['t_corr']
+        delta_r_corr_1 = plot_data_1x['delta_r_corr']
+        t_corr_2 = plot_data_2x['t_corr']
+        delta_r_corr_2 = plot_data_2x['delta_r_corr']
+        
+        n_corr = min(len(t_corr_1), len(t_corr_2))
+        t_corr_plot = t_corr_1[:n_corr]
+        delta_dev_corr = np.abs(delta_r_corr_1[:n_corr] - delta_r_corr_2[:n_corr]) # (n_corr, 3)
+
+    except KeyError as e:
+        print(f"[ERROR] Missing key {e} in plot_data for deviation delta plot. Skipping.")
+        plt.rcParams.update(original_rc_params) # Reset params
+        return
+    except Exception as e:
+        print(f"[ERROR] Failed to process data for deviation delta plot: {e}. Skipping.")
+        plt.rcParams.update(original_rc_params) # Reset params
+        return
+
+    # --- 3. Plotting ---
+    fig, axes = plt.subplots(3, 2, figsize=(20, 18), sharex=True)
+    
+    # <--- MODIFIED: Added 'r' to make these raw strings ---
+    delta_labels = [r'Abs. Deviation Delta ($|\Delta \delta_r|$) [km]', 
+                    r'Abs. Deviation Delta ($|\Delta \delta_c|$) [km]', 
+                    r'Abs. Deviation Delta ($|\Delta \delta_n|$) [km]']
+    
+    c_opt = '0.4'       # Medium gray
+    ls_opt = '--'       # Dashed
+    
+    c_corr = '0.0'      # Black
+    ls_corr = ':'       # Dotted
+    
+    for i in range(3):
+        # Left Column: Optimal Delta
+        ax_opt = axes[i, 0]
+        ax_opt.plot(t_opt_plot, delta_dev_opt[:, i], color=c_opt, linestyle=ls_opt, lw=2.5)
+        ax_opt.set_ylabel(delta_labels[i])
+        ax_opt.grid(True, linestyle=':')
+        
+        # Right Column: Corrective Delta
+        ax_corr = axes[i, 1]
+        ax_corr.plot(t_corr_plot, delta_dev_corr[:, i], color=c_corr, linestyle=ls_corr, lw=2.5)
+        ax_corr.grid(True, linestyle=':')
+
+        if i == 0:
+            ax_opt.set_title("Optimal (Open-Loop) Deviation Delta")
+            ax_corr.set_title("Corrective (Closed-Loop) Deviation Delta")
+        
+    axes[-1, 0].set_xlabel('Time [TU]')
+    axes[-1, 1].set_xlabel('Time [TU]')
+    
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fname = f"deviation_delta_rcn_{window_type}.pdf"
+    plt.savefig(os.path.join(output_dir, fname))
+    plt.close()
+    
+    # Reset matplotlib parameters to default
+    plt.rcParams.update(original_rc_params)
+    
+    print(f"\n[Saved Plot] {fname}")
+
 
 # ==============================================================================
 # === CORE PROPAGATION AND CONTROL LOGIC =======================================
@@ -505,10 +709,11 @@ def propagate_and_control(models, strategy, t_eval, data, sol_nom, initial_mc_st
             
             if mee_states_current.shape[0] > 1:
                 devs_current = mee_states_current - mean_mee_state_curr
-                # --- SECOND KEY CHANGE: Scale the *current* covariance ---
+                # --- THIS IS THE KEY PART FOR YOUR REQUEST #1 ---
+                # --- (This was already present and correct) ---
                 cov_current = np.einsum('ji,jk->ik', devs_current, devs_current) / (len(mc_states_current) - 1)
-                diag_vals_current = np.diag(cov_current) * covariance_multiplier # <-- Modified line
-                # --- END OF CHANGE ---
+                diag_vals_current = np.diag(cov_current) * covariance_multiplier # <-- Multiplier is applied here
+                # --- END OF KEY PART ---
             else:
                 diag_vals_current = np.zeros(7)
 
@@ -594,8 +799,8 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
             models, 'optimal', t_eval, data, sol_nom, initial_mc_states, window_type, covariance_multiplier
         )
 
-
-    plot_final_deviations_rcn_and_thrust(
+    # --- MODIFIED: Capture plot_data ---
+    plot_data = plot_final_deviations_rcn_and_thrust(
         t_eval, history_optimal, history_corrective, sol_nom, sol_nom_perturbed, 
         data["mu"], DU_km, window_type, covariance_multiplier, corrective_replan_times
     )
@@ -604,7 +809,7 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
     
     if sol_nom.y.shape[1] < 2:
         print("[ERROR] Nominal solution failed to propagate. Cannot generate summary.")
-        return None # <-- MODIFIED
+        return None, None # <-- MODIFIED
         
     r_final_nom, _ = mee2rv(*sol_nom.y[:6, -1], mu)
     
@@ -675,7 +880,7 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
     
     print(summary_df.to_string(index=False))
     
-    return summary_df # <-- MODIFIED
+    return summary_df, plot_data # <-- MODIFIED
 
 # ==============================================================================
 # === MAIN EXECUTION BLOCK =====================================================
@@ -738,15 +943,22 @@ def main():
         return # Can't continue
     
     # Run Max Window simulations (pass the *same* samples to both)
-    # --- MODIFIED to capture results ---
-    res_max_1 = run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=1.0)
+    # --- MODIFIED to capture results and plot data ---
+    res_max_1, plot_data_max_1 = run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=1.0)
     if res_max_1 is not None:
         all_results.append(res_max_1)
         
-    res_max_2 = run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=2.0)
+    res_max_2, plot_data_max_2 = run_comparison_simulation(models_max, t_start_max, t_end_replan_max, 'max', data, initial_mc_states_max, covariance_multiplier=2.0)
     if res_max_2 is not None:
         all_results.append(res_max_2)
-    # --- END MODIFIED ---
+    
+    # --- ADDED: Call delta plots ---
+    if plot_data_max_1 and plot_data_max_2:
+        plot_control_delta(plot_data_max_1, plot_data_max_2, 'max', output_dir)
+        plot_deviation_delta(plot_data_max_1, plot_data_max_2, 'max', output_dir)
+    else:
+        print("[WARN] Skipping delta plots for MAX window due to missing plot data.")
+    # --- END ADDED ---
     
     # --- MIN Window Setup & Sample Generation ---
     print("\n[INFO] Setting up MIN Window simulation...")
@@ -769,22 +981,29 @@ def main():
             mee_state = rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten()
             initial_mee_states_list.append(np.hstack([mee_state, s[6]]))
         initial_mee_states_min = np.array(initial_mee_states_list)
-        initial_mc_states_min = np.hstack([initial_mee_states_min, np.tile(initial_lam_min, (NUM_MC_SAMPLES, 1))])
+        initial_mc_states_min = np.hstack([initial_mc_states_min, np.tile(initial_lam_min, (NUM_MC_SAMPLES, 1))])
         print(f"[INFO] ...sampling complete for MIN window.")
     except Exception as e:
         print(f"[ERROR] Failed during MC sampling for MIN window: {e}")
         return
 
     # Run Min Window simulations (pass the *same* samples to both)
-    # --- MODIFIED to capture results ---
-    res_min_1 = run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=1.0)
+    # --- MODIFIED to capture results and plot data ---
+    res_min_1, plot_data_min_1 = run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=1.0)
     if res_min_1 is not None:
         all_results.append(res_min_1)
 
-    res_min_2 = run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=2.0)
+    res_min_2, plot_data_min_2 = run_comparison_simulation(models_min, t_start_min, t_end_replan_min, 'min', data, initial_mc_states_min, covariance_multiplier=2.0)
     if res_min_2 is not None:
         all_results.append(res_min_2)
-    # --- END MODIFIED ---
+    
+    # --- ADDED: Call delta plots ---
+    if plot_data_min_1 and plot_data_min_2:
+        plot_control_delta(plot_data_min_1, plot_data_min_2, 'min', output_dir)
+        plot_deviation_delta(plot_data_min_1, plot_data_min_2, 'min', output_dir)
+    else:
+        print("[WARN] Skipping delta plots for MIN window due to missing plot data.")
+    # --- END ADDED ---
     
     # --- ADDED: Concatenate all results and save to CSV ---
     if all_results:
