@@ -398,7 +398,8 @@ def plot_final_deviations_rcn_and_thrust(t_eval, history_optimal, history_correc
     # --- MODIFIED: Package data for return ---
     plot_data = {
         't_opt': t_opt, 'delta_r_opt': delta_r_optimal, 'u_opt_rcn': u_optimal_rcn,
-        't_corr': t_corr, 'delta_r_corr': delta_r_corrective, 'u_corr_rcn': u_corrective_rcn
+        't_corr': t_corr, 'delta_r_corr': delta_r_corrective, 'u_corr_rcn': u_corrective_rcn,
+        'replan_times': replan_times # <--- ADDED
     }
     
     # Reset matplotlib parameters to default
@@ -464,7 +465,6 @@ def plot_control_delta(plot_data_1x, plot_data_2x, window_type, output_dir):
     # --- 3. Plotting ---
     fig, axes = plt.subplots(3, 2, figsize=(20, 18), sharex=True)
     
-    # <--- MODIFIED: Added 'r' to make these raw strings ---
     delta_labels = [r'Abs. Control Delta ($|\Delta u_r|$)', 
                     r'Abs. Control Delta ($|\Delta u_c|$)', 
                     r'Abs. Control Delta ($|\Delta u_n|$)']
@@ -474,6 +474,19 @@ def plot_control_delta(plot_data_1x, plot_data_2x, window_type, output_dir):
     
     c_corr = '0.0'      # Black
     ls_corr = ':'       # Dotted
+    
+    # --- MODIFIED: Get distinct replan times ---
+    replan_times_1x = set(plot_data_1x.get('replan_times', []))
+    replan_times_2x = set(plot_data_2x.get('replan_times', []))
+    
+    common_times = sorted(list(replan_times_1x & replan_times_2x))
+    times_1x_only = sorted(list(replan_times_1x - replan_times_2x))
+    times_2x_only = sorted(list(replan_times_2x - replan_times_1x))
+    
+    first_label_common = True
+    first_label_1x = True
+    first_label_2x = True
+    # --- END MODIFIED ---
     
     for i in range(3):
         # Left Column: Optimal Delta
@@ -487,9 +500,44 @@ def plot_control_delta(plot_data_1x, plot_data_2x, window_type, output_dir):
         ax_corr.plot(t_corr_plot, delta_u_corr[:, i], color=c_corr, linestyle=ls_corr, lw=2.5)
         ax_corr.grid(True, linestyle=':')
 
+        # --- MODIFIED: Replan Marker Plotting Logic ---
+        # Plot common replan events
+        if common_times:
+            for t_replan in common_times:
+                if t_corr_plot.size > 0 and t_replan <= t_corr_plot[-1]:
+                    idx = np.argmin(np.abs(t_corr_plot - t_replan))
+                    y_val = delta_u_corr[idx, i]
+                    label = 'Replanning Event (Both)' if i == 0 and first_label_common else None
+                    ax_corr.plot(t_replan, y_val, 'kx', markersize=12, markeredgewidth=2.5, label=label)
+                    if i == 0: first_label_common = False
+        
+        # Plot 1.0x only replan events
+        if times_1x_only:
+            for t_replan in times_1x_only:
+                if t_corr_plot.size > 0 and t_replan <= t_corr_plot[-1]:
+                    idx = np.argmin(np.abs(t_corr_plot - t_replan))
+                    y_val = delta_u_corr[idx, i]
+                    label = 'Replanning Event (1.0x)' if i == 0 and first_label_1x else None
+                    ax_corr.plot(t_replan, y_val, 'k+', markersize=12, markeredgewidth=2.5, label=label)
+                    if i == 0: first_label_1x = False
+
+        # Plot 2.0x only replan events
+        if times_2x_only:
+            for t_replan in times_2x_only:
+                if t_corr_plot.size > 0 and t_replan <= t_corr_plot[-1]:
+                    idx = np.argmin(np.abs(t_corr_plot - t_replan))
+                    y_val = delta_u_corr[idx, i]
+                    label = 'Replanning Event (2.0x)' if i == 0 and first_label_2x else None
+                    ax_corr.plot(t_replan, y_val, 'ko', markersize=10, markerfacecolor='none', markeredgewidth=2.5, label=label)
+                    if i == 0: first_label_2x = False
+        # --- END MODIFIED ---
+
         if i == 0:
             ax_opt.set_title("Optimal (Open-Loop) Control Delta")
             ax_corr.set_title("Corrective (Closed-Loop) Control Delta")
+            # --- MODIFIED: Only add legend if any labels were plotted ---
+            if not (first_label_common and first_label_1x and first_label_2x):
+                ax_corr.legend()
         
     axes[-1, 0].set_xlabel('Time [TU]')
     axes[-1, 1].set_xlabel('Time [TU]')
@@ -561,7 +609,6 @@ def plot_deviation_delta(plot_data_1x, plot_data_2x, window_type, output_dir):
     # --- 3. Plotting ---
     fig, axes = plt.subplots(3, 2, figsize=(20, 18), sharex=True)
     
-    # <--- MODIFIED: Added 'r' to make these raw strings ---
     delta_labels = [r'Abs. Deviation Delta ($|\Delta \delta_r|$) [km]', 
                     r'Abs. Deviation Delta ($|\Delta \delta_c|$) [km]', 
                     r'Abs. Deviation Delta ($|\Delta \delta_n|$) [km]']
@@ -571,6 +618,19 @@ def plot_deviation_delta(plot_data_1x, plot_data_2x, window_type, output_dir):
     
     c_corr = '0.0'      # Black
     ls_corr = ':'       # Dotted
+    
+    # --- MODIFIED: Get distinct replan times ---
+    replan_times_1x = set(plot_data_1x.get('replan_times', []))
+    replan_times_2x = set(plot_data_2x.get('replan_times', []))
+    
+    common_times = sorted(list(replan_times_1x & replan_times_2x))
+    times_1x_only = sorted(list(replan_times_1x - replan_times_2x))
+    times_2x_only = sorted(list(replan_times_2x - replan_times_1x))
+    
+    first_label_common = True
+    first_label_1x = True
+    first_label_2x = True
+    # --- END MODIFIED ---
     
     for i in range(3):
         # Left Column: Optimal Delta
@@ -584,9 +644,45 @@ def plot_deviation_delta(plot_data_1x, plot_data_2x, window_type, output_dir):
         ax_corr.plot(t_corr_plot, delta_dev_corr[:, i], color=c_corr, linestyle=ls_corr, lw=2.5)
         ax_corr.grid(True, linestyle=':')
 
+        # --- MODIFIED: Replan Marker Plotting Logic ---
+        # Plot common replan events
+        if common_times:
+            for t_replan in common_times:
+                if t_corr_plot.size > 0 and t_replan <= t_corr_plot[-1]:
+                    idx = np.argmin(np.abs(t_corr_plot - t_replan))
+                    y_val = delta_dev_corr[idx, i]
+                    label = 'Replanning Event (Both)' if i == 0 and first_label_common else None
+                    ax_corr.plot(t_replan, y_val, 'kx', markersize=12, markeredgewidth=2.5, label=label)
+                    if i == 0: first_label_common = False
+        
+        # Plot 1.0x only replan events
+        if times_1x_only:
+            for t_replan in times_1x_only:
+                if t_corr_plot.size > 0 and t_replan <= t_corr_plot[-1]:
+                    idx = np.argmin(np.abs(t_corr_plot - t_replan))
+                    y_val = delta_dev_corr[idx, i]
+                    label = 'Replanning Event (1.0x)' if i == 0 and first_label_1x else None
+                    ax_corr.plot(t_replan, y_val, 'k+', markersize=12, markeredgewidth=2.5, label=label)
+                    if i == 0: first_label_1x = False
+
+        # Plot 2.0x only replan events
+        if times_2x_only:
+            for t_replan in times_2x_only:
+                if t_corr_plot.size > 0 and t_replan <= t_corr_plot[-1]:
+                    idx = np.argmin(np.abs(t_corr_plot - t_replan))
+                    y_val = delta_dev_corr[idx, i]
+                    label = 'Replanning Event (2.0x)' if i == 0 and first_label_2x else None
+                    ax_corr.plot(t_replan, y_val, 'ko', markersize=10, markerfacecolor='none', markeredgewidth=2.5, label=label)
+                    if i == 0: first_label_2x = False
+        # --- END MODIFIED ---
+
+
         if i == 0:
             ax_opt.set_title("Optimal (Open-Loop) Deviation Delta")
             ax_corr.set_title("Corrective (Closed-Loop) Deviation Delta")
+            # --- MODIFIED: Only add legend if any labels were plotted ---
+            if not (first_label_common and first_label_1x and first_label_2x):
+                ax_corr.legend()
         
     axes[-1, 0].set_xlabel('Time [TU]')
     axes[-1, 1].set_xlabel('Time [TU]')
@@ -600,7 +696,6 @@ def plot_deviation_delta(plot_data_1x, plot_data_2x, window_type, output_dir):
     plt.rcParams.update(original_rc_params)
     
     print(f"\n[Saved Plot] {fname}")
-
 
 # ==============================================================================
 # === CORE PROPAGATION AND CONTROL LOGIC =======================================
@@ -804,6 +899,12 @@ def run_comparison_simulation(models, t_start_replan, t_end_replan, window_type,
         t_eval, history_optimal, history_corrective, sol_nom, sol_nom_perturbed, 
         data["mu"], DU_km, window_type, covariance_multiplier, corrective_replan_times
     )
+    
+    # --- ADDED: Handle plot failure case ---
+    if plot_data is None:
+        print("[WARN] Plotting failed, creating empty plot_data dict.")
+        plot_data = {}
+    # --- END ADDED ---
 
     print(f"\n--- Performance Summary Table ({window_type.upper()} Window, Cov x{covariance_multiplier}) ---")
     
@@ -981,7 +1082,7 @@ def main():
             mee_state = rv2mee(s[:3].reshape(1,3), s[3:6].reshape(1,3), mu).flatten()
             initial_mee_states_list.append(np.hstack([mee_state, s[6]]))
         initial_mee_states_min = np.array(initial_mee_states_list)
-        initial_mc_states_min = np.hstack([initial_mc_states_min, np.tile(initial_lam_min, (NUM_MC_SAMPLES, 1))])
+        initial_mc_states_min = np.hstack([initial_mee_states_min, np.tile(initial_lam_min, (NUM_MC_SAMPLES, 1))])
         print(f"[INFO] ...sampling complete for MIN window.")
     except Exception as e:
         print(f"[ERROR] Failed during MC sampling for MIN window: {e}")
