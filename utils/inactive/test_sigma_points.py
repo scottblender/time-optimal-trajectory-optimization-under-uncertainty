@@ -11,9 +11,8 @@ P_combined = np.block([
     [np.eye(nsd//2) * 0.01, np.zeros((nsd//2, nsd//2))],  # Position covariance with zero velocity covariance
     [np.zeros((nsd//2, nsd//2)), np.eye(nsd//2) * 0.001]  # Velocity covariance
 ])
-U = scipy.linalg.cholesky((nsd+lambda_)*P_combined) 
-print(U)
-X = 1
+U = scipy.linalg.cholesky((nsd+lambda_)*P_combined) # cholesky decomposition
+X = np.array([0,1.5,2, -0.5, -0.3, 0]) # initial state
 sigmas[0] = X
 for k in range (nsd):
    sigmas[k+1] =  X + U[k]
